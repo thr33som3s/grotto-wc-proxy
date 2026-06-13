@@ -4,15 +4,18 @@ export default async function handler(req, res) {
 
   const API_KEY = process.env.FOOTBALL_API_KEY;
 
-  // 2026 World Cup competition ID on football-data.org is 2000 (FIFA World Cup)
-  // We fetch current matches to get live + today's scores
-  const url = 'https://api.football-data.org/v4/competitions/2000/matches?status=LIVE,FINISHED,IN_PLAY,PAUSED';
+  // football-data.org v4 — FIFA World Cup 2026 uses competition code "WC"
+  // Fetch today's matches + live matches
+  const url = 'https://api.football-data.org/v4/competitions/WC/matches?status=LIVE,IN_PLAY,PAUSED,FINISHED';
 
   try {
     const response = await fetch(url, {
       headers: { 'X-Auth-Token': API_KEY }
     });
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error('API error: ' + response.status + ' ' + text);
+    }
     const data = await response.json();
     res.status(200).json(data);
   } catch (err) {
