@@ -8,9 +8,9 @@ export default async function handler(req, res) {
   const SHEET_MAP = {
     'bulk':      '1s_8-7x5Sq9vnARg1myRKWHnjqjyoj-7QXelol0l8xwQ',
     'univ3rs3':  '1KQh5V76-jcTQxTAhAIHZvGQHNhbP6_yGKcnCutbmaJs',
-    'gen2':      '1aWO-XB7n409h2_9xoVq9f8q72kU3t7L2PsVYWPK8S9o',
+    'gen2':      '1fmYevh7PteIB8VD7u7MstffY8ZR6qK6BgKrgUEVVQRU',
     'gen3':      '1i15K-52jj4wMYMRWUcYrZuwxJQcAXcFPn-ocglmkxgg',
-    'thr33zi3s': '1fmYevh7PteIB8VD7u7MstffY8ZR6qK6BgKrgUEVVQRU',
+    'thr33zi3s': '1aWO-XB7n409h2_9xoVq9f8q72kU3t7L2PsVYWPK8S9o',
     'guest':     '1qnlN5EHwSn71bjMFKCu9y71DUdNnkvcVda6AA2HPi-s',
   };
 
