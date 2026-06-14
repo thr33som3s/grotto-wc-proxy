@@ -6,10 +6,8 @@ export default async function handler(req, res) {
   const SHEET_ID = '1s_8-7x5Sq9vnARg1myRKWHnjqjyoj-7QXelol0l8xwQ';
   const tab      = req.query.tab || 'BASE-thr33som3s-Bulk-metadata';
 
-  // Encode the range — tab name needs single quotes if it contains spaces/special chars
-  const safeTab  = tab.includes(' ') || tab.includes('-')
-    ? `'${tab}'`
-    : tab;
+  // Encode the range — tab name needs single quotes only if it contains spaces
+  const safeTab  = tab.includes(' ') ? `'${tab}'` : tab;
   const range    = encodeURIComponent(`${safeTab}!A:BF`);
   const url      = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?key=${API_KEY}`;
 
