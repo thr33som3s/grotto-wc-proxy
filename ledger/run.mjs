@@ -101,7 +101,8 @@ async function check(state) {
 }
 
 async function main() {
-  if (!SHEET || !ALCHEMY || !ACCESS_TOKEN) throw new Error("LEDGER_SHEET_ID, ALCHEMY_API_KEY and a Google access token must be set");
+  const missing = [!SHEET && "LEDGER_SHEET_ID", !ALCHEMY && "ALCHEMY_API_KEY (repository secret)", !ACCESS_TOKEN && "Google access token (from the sign-in step)"].filter(Boolean);
+  if (missing.length) throw new Error(`Missing: ${missing.join(", ")}`);
   const started = Date.now();
   let state = REBUILD ? {} : await readState();
   if (!Object.keys(state).length) {
