@@ -1,0 +1,39 @@
+name: ledger
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: "Rebuild the ledger from block 0"
+        type: boolean
+        default: false
+concurrency:
+  group: ledger
+  cancel-in-progress: false
+permissions:
+  contents: read
+  id-token: write # lets GitHub prove its identity to Google, no key needed
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: google
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/276784753717/locations/global/workloadIdentityPools/github/providers/github-actions
+          service_account: thr33som3s-ledger@advance-elixir-499223-g7.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/spreadsheets
+          access_token_lifetime: 3600s
+      - run: node ledger/run.mjs
+        env:
+          LEDGER_SHEET_ID: 1vDH6lXF_xegq8pWzGdDgHJPwnmpmoDXZoMaWj967UtM
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          GOOGLE_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
+          REBUILD: ${{ inputs.rebuild || 'false' }}
