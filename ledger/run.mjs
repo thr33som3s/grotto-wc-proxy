@@ -3,12 +3,13 @@
 // Later runs: check both chains for events since the last processed block. Nothing new -> exit.
 // Something new -> write it, rebuild holdings and supply, then keep checking every minute
 // until 15 minutes pass with no further changes.
-import crypto from "node:crypto";
 import { CONTRACTS, CHAINS, TRANSFER_HEADER, HOLDINGS_HEADER, SUPPLY_HEADER, rowsFromTransfer, derive } from "./core.mjs";
 
 const SHEET = process.env.LEDGER_SHEET_ID;
 const ALCHEMY = process.env.ALCHEMY_API_KEY;
-const SA = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT || "{}");
+// Google access comes from GitHub's keyless login (Workload Identity Federation): the workflow
+// exchanges GitHub's identity for a short-lived token. No service account key exists anywhere.
+const ACCESS_TOKEN = process.env.GOOGLE_ACCESS_TOKEN;
 const REBUILD = process.env.REBUILD === "true";
 const BURST_QUIET_MS = 15 * 60 * 1000;
 const BURST_INTERVAL_MS = 60 * 1000;
@@ -17,19 +18,8 @@ const MAX_RUN_MS = 50 * 60 * 1000; // stay under the workflow's timeout
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ---------- Google Sheets (service account) ----------
-let token = null, tokenExp = 0;
-async function gtoken() {
-  if (token && Date.now() < tokenExp - 60000) return token;
-  const now = Math.floor(Date.now() / 1000);
-  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const unsigned = `${b64({ alg: "RS256", typ: "JWT" })}.${b64({ iss: SA.client_email, scope: "https://www.googleapis.com/auth/spreadsheets", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
-  const sig = crypto.createSign("RSA-SHA256").update(unsigned).sign(SA.private_key).toString("base64url");
-  const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${unsigned}.${sig}` }) });
-  if (!r.ok) throw new Error(`Google auth failed: ${r.status}`);
-  const j = await r.json(); token = j.access_token; tokenExp = Date.now() + j.expires_in * 1000;
-  return token;
-}
+// ---------- Google Sheets ----------
+const gtoken = async () => ACCESS_TOKEN;
 const S = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET}`;
 async function sheets(path, opts = {}) {
   const r = await fetch(S + path, { ...opts, headers: { Authorization: `Bearer ${await gtoken()}`, "Content-Type": "application/json" } });
@@ -111,7 +101,7 @@ async function check(state) {
 }
 
 async function main() {
-  if (!SHEET || !ALCHEMY || !SA.client_email) throw new Error("LEDGER_SHEET_ID, ALCHEMY_API_KEY and GOOGLE_SERVICE_ACCOUNT must be set");
+  if (!SHEET || !ALCHEMY || !ACCESS_TOKEN) throw new Error("LEDGER_SHEET_ID, ALCHEMY_API_KEY and a Google access token must be set");
   const started = Date.now();
   let state = REBUILD ? {} : await readState();
   if (!Object.keys(state).length) {

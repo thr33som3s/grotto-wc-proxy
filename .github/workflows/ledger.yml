@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: false
 permissions:
   contents: read
+  id-token: write # lets GitHub prove its identity to Google, no key needed
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -22,9 +23,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - id: google
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: thr33som3s-ledger@advance-elixir-499223-g7.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/spreadsheets
+          access_token_lifetime: 3600s
       - run: node ledger/run.mjs
         env:
           LEDGER_SHEET_ID: 1vDH6lXF_xegq8pWzGdDgHJPwnmpmoDXZoMaWj967UtM
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
-          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          GOOGLE_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
           REBUILD: ${{ inputs.rebuild || 'false' }}
