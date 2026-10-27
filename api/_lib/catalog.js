@@ -49,6 +49,8 @@ export function cleanValue(v) {
 // Collections whose images are now pinned to the thr33som3s Pinata account (pin-images job):
 // their full links are rerouted through the thr33som3s gateway too.
 export const PINNED_ON_OWN_GATEWAY = new Set(["thr33zi3s", "gen2"]);
+// Collections whose images come from the contract's on-chain metadata (the "images" job), not the sheet.
+export const IMAGE_FROM_CHAIN = new Set(["guest"]);
 
 export function imageUrl(v, collKey) {
   const s = norm(v);

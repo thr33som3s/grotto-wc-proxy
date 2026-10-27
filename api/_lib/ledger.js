@@ -36,3 +36,13 @@ export async function readState(key) {
 }
 
 export const isAddress = (w) => /^0x[0-9a-fA-F]{40}$/.test(w || "");
+
+// Images read from contracts' on-chain metadata by the "images" job: key -> { image, cached }.
+// Empty until the job has run; callers fall back to the sheet's own image.
+export async function readImages(key) {
+  try {
+    const out = new Map();
+    for (const [coll, id, image, cached] of await tab("images", "E", key)) out.set(tokenKey(coll, id), { image: image || "", cached: cached || "" });
+    return out;
+  } catch { return new Map(); }
+}

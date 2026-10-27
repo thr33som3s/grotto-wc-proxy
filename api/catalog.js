@@ -3,8 +3,8 @@
 // trait values normalized, gen differences merged into one set of trait fields, and trait families applied.
 // Each token carries editions: { minted, burned, circulating, holders } from the on-chain ledger.
 // Query: ?collection=gen2 (one collection only), ?unassigned=1 (include values not yet in a family).
-import { COLLECTIONS, FAMILIES_SHEET, buildCollection, parseFamilies, applyFamilies } from "./_lib/catalog.js";
-import { readSupply, readState } from "./_lib/ledger.js";
+import { COLLECTIONS, FAMILIES_SHEET, buildCollection, parseFamilies, applyFamilies, IMAGE_FROM_CHAIN, imageUrl } from "./_lib/catalog.js";
+import { readSupply, readState, readImages } from "./_lib/ledger.js";
 
 const API = "https://sheets.googleapis.com/v4/spreadsheets";
 
@@ -62,6 +62,17 @@ export default async function handler(req, res) {
     unlisted = [...supply.entries()].filter(([k]) => !listed.has(k) && wanted.has(k.split(":")[0])).map(([key, editions]) => ({ key, editions }));
     ledger = state;
   } catch (e) { errors.push({ collection: "ledger", error: e.message }); }
+
+  // On-chain images for collections whose sheet links don't load. Prefer the metadata's own IPFS link
+  // through the thr33som3s gateway only when it's pinned there; otherwise Alchemy's cached copy.
+  try {
+    const imgs = await readImages(KEY);
+    for (const t of tokens) {
+      if (!IMAGE_FROM_CHAIN.has(t.coll)) continue;
+      const m = imgs.get(t.key);
+      if (m && (m.cached || m.image)) t.image = m.cached || imageUrl(m.image, t.coll);
+    }
+  } catch (e) { errors.push({ collection: "images", error: e.message }); }
 
   res.status(errors.length && !tokens.length ? 502 : 200).json({
     generatedAt: new Date().toISOString(),
