@@ -21,10 +21,25 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---------- Google Sheets ----------
 const gtoken = async () => ACCESS_TOKEN;
 const S = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET}`;
+// Google and Alchemy both have brief outages; retry 5xx and rate limits with backoff before giving up.
+async function withRetry(label, fn) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await fn(); }
+    catch (e) {
+      if (!e.retryable || attempt >= 4) throw e;
+      const wait = 5000 * 2 ** (attempt - 1);
+      log(`${label}: ${e.message}; retrying in ${wait / 1000}s`);
+      await sleep(wait);
+    }
+  }
+}
+const httpError = (msg, status) => Object.assign(new Error(msg), { retryable: status === 429 || status >= 500 });
 async function sheets(path, opts = {}) {
-  const r = await fetch(S + path, { ...opts, headers: { Authorization: `Bearer ${await gtoken()}`, "Content-Type": "application/json" } });
-  if (!r.ok) throw new Error(`Sheets ${opts.method || "GET"} ${path.split("?")[0]} failed: ${r.status} ${(await r.text()).slice(0, 200)}`);
-  return r.json();
+  return withRetry("sheets", async () => {
+    const r = await fetch(S + path, { ...opts, headers: { Authorization: `Bearer ${await gtoken()}`, "Content-Type": "application/json" } });
+    if (!r.ok) throw httpError(`Sheets ${opts.method || "GET"} ${path.split("?")[0]} failed: ${r.status} ${(await r.text()).slice(0, 200)}`, r.status);
+    return r.json();
+  });
 }
 const rng = (a) => encodeURIComponent(a);
 const readTab = async (tab, cols) => ((await sheets(`/values/${rng(`${tab}!A:${cols}`)}`)).values || []);
@@ -43,11 +58,13 @@ async function appendTab(tab, rows) {
 
 // ---------- Alchemy ----------
 async function alchemy(chain, method, params) {
-  const r = await fetch(`https://${CHAINS[chain].alchemy}.g.alchemy.com/v2/${ALCHEMY}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: 1, jsonrpc: "2.0", method, params }) });
-  if (!r.ok) throw new Error(`Alchemy ${chain} ${method}: HTTP ${r.status}`);
-  const j = await r.json();
-  if (j.error) throw new Error(`Alchemy ${chain} ${method}: ${j.error.message}`);
-  return j.result;
+  return withRetry("alchemy", async () => {
+    const r = await fetch(`https://${CHAINS[chain].alchemy}.g.alchemy.com/v2/${ALCHEMY}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: 1, jsonrpc: "2.0", method, params }) });
+    if (!r.ok) throw httpError(`Alchemy ${chain} ${method}: HTTP ${r.status}`, r.status);
+    const j = await r.json();
+    if (j.error) throw httpError(`Alchemy ${chain} ${method}: ${j.error.message}`, 500);
+    return j.result;
+  });
 }
 // Events from fromBlock to toBlock (inclusive) for this chain's contracts, oldest first.
 async function transfers(chain, fromBlock, toBlock) {
@@ -100,6 +117,19 @@ async function check(state) {
   return added;
 }
 
+// If a run failed after appending events but before saving its state, the next run would fetch
+// those blocks again and double-count them. Drop any rows past each chain's saved block first.
+async function repairPastState(state) {
+  const all = await readTab("transfers", "L");
+  if (all.length <= 1) return;
+  const [head, ...rows] = all;
+  const keep = rows.filter((r) => { const st = state[r[0]]; return !st || Number(r[8]) <= st.lastBlock; });
+  if (keep.length === rows.length) return;
+  log(`repair: removing ${rows.length - keep.length} rows recorded past the saved state`);
+  await writeTab("transfers", [head, ...keep]);
+  await rebuildDerived();
+}
+
 async function main() {
   const missing = [!SHEET && "LEDGER_SHEET_ID", !ALCHEMY && "ALCHEMY_API_KEY (repository secret)", !ACCESS_TOKEN && "Google access token (from the sign-in step)"].filter(Boolean);
   if (missing.length) throw new Error(`Missing: ${missing.join(", ")}`);
@@ -109,6 +139,7 @@ async function main() {
     log("no state: full backfill from block 0");
     await writeTab("transfers", [TRANSFER_HEADER]);
   }
+  if (Object.keys(state).length) await repairPastState(state);
   let added = await check(state);
   if (!added) { log("no new events"); return; }
   // Burst: keep checking every minute until 15 quiet minutes.
