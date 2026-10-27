@@ -162,6 +162,8 @@ export function checkDemographics(payload, tokens, held) {
     if (new Set(races).size !== races.length) out.push("a demographic can be placed in a race only once");
     if (races.some((r) => !RACE_CODES.has(r))) out.push("unknown race");
     if (races.length > CAPACITY[tiers - 1]) out.push(`too many races for ${CAPACITY[tiers - 1]} placements`);
+    // Every placement paid for must be placed.
+    if (races.length < CAPACITY[tiers - 1]) out.push(`${d.team || "a demographic"} (${d.color || "no color"}): ${races.length} of ${CAPACITY[tiers - 1]} placements placed; place ${CAPACITY[tiers - 1] - races.length} more`);
     cost += insertCost(d.kind, tiers);
     if (d.kind === "straddle") {
       const other = teams.get(d.team);
