@@ -52,19 +52,33 @@ export const DESTINATIONS = {
   "3vault": "0xe5a97ce51460114e13b632df211896c663cbae76",
 };
 
-// Which committed candidates the ledger shows arriving at 333burn from the collector during the
-// confirmation window (in rehearsal mode: any time after the entry was submitted).
-// Returns { "univ3rs3:10010": { tx, time }, ... }.
-export function candidacyBurns(entry, wallet, transfers, win) {
-  const want = new Set((entry?.payload?.entries || []).map((e) => e.candidate));
-  const from = TEST_MODE ? Date.parse(entry.submitted_at) : Date.parse(win.confirmOpens);
-  const to = TEST_MODE ? Infinity : Date.parse(win.confirmCloses);
+// Confirmation status for any committed pieces. items: [{ key, dest: "333burn" | "3vault", qty }].
+// Counts what the ledger shows moving from the wallet to each item's destination between fromMs and toMs.
+// Returns { key: { dest, qty, sent, txs: [...] } }.
+export function sentTo(items, wallet, transfers, fromMs, toMs) {
   const out = {};
+  for (const it of items) out[it.key] = { dest: it.dest, qty: it.qty, sent: 0, txs: [] };
   for (const t of transfers) {
-    if (t.from !== wallet || t.to !== DESTINATIONS["333burn"] || !want.has(t.key) || t.amount < 1) continue;
+    const o = out[t.key];
+    if (!o || t.from !== wallet || t.to !== DESTINATIONS[o.dest]) continue;
     const at = Date.parse(t.time);
-    if (!(at >= from && at <= to)) continue;
-    if (!out[t.key]) out[t.key] = { tx: t.tx, time: t.time };
+    if (!(at >= fromMs && at <= toMs)) continue;
+    o.sent += t.amount;
+    if (!o.txs.includes(t.tx)) o.txs.push(t.tx);
   }
+  return out;
+}
+// The window a phase's confirmations count in (rehearsal mode: any time after the entry was submitted).
+export function confirmSpan(entry, win) {
+  return TEST_MODE ? [Date.parse(entry.submitted_at), Infinity] : [Date.parse(win.confirmOpens), Date.parse(win.confirmCloses)];
+}
+
+// Candidacy: each committed candidate is one edition to 333burn. Returns { key: { tx, time } } for those burned.
+export function candidacyBurns(entry, wallet, transfers, win) {
+  const items = (entry?.payload?.entries || []).map((e) => ({ key: e.candidate, dest: "333burn", qty: 1 }));
+  const [from, to] = confirmSpan(entry, win);
+  const st = sentTo(items, wallet, transfers, from, to);
+  const out = {};
+  for (const [k, v] of Object.entries(st)) if (v.sent >= 1) out[k] = { tx: v.txs[0] };
   return out;
 }
