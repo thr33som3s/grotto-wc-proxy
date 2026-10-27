@@ -43,12 +43,14 @@ export function cleanValue(v) {
   return s.replace(/^DK\b/i, "DARK").replace(/^LT\b/i, "LIGHT");
 }
 
-// Any of: full gateway URL, pinata URL, bare CID (with or without a path) -> our gateway.
+// Full links in a sheet are kept exactly as written: the thr33som3s gateway only serves content
+// pinned to its own Pinata account, and the gen1/gen2 images are pinned elsewhere.
+// Bare CIDs (univ3rs3, bulk, gen3) and ipfs:// links go through the thr33som3s gateway.
 export function imageUrl(v) {
   const s = norm(v);
   if (!s) return "";
-  const i = s.indexOf("/ipfs/");
-  if (i >= 0) return IPFS_GATEWAY + s.slice(i + 6);
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith("ipfs://")) return IPFS_GATEWAY + s.slice(7);
   if (/^(Qm|baf)/.test(s)) return IPFS_GATEWAY + s;
   return s;
 }
