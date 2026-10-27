@@ -1,0 +1,37 @@
+name: token-metadata
+on:
+  workflow_dispatch:
+    inputs:
+      collection:
+        description: "Collection (univ3rs3, bulk, thr33zi3s, gen2, gen3, guest)"
+        default: "univ3rs3"
+      ids:
+        description: "Token IDs, comma separated"
+        default: "3011,3015,3016,5016,5017,6015,6017,8016,8017,9016"
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: google
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/276784753717/locations/global/workloadIdentityPools/github/providers/github-actions
+          service_account: thr33som3s-ledger@advance-elixir-499223-g7.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/spreadsheets
+          access_token_lifetime: 3600s
+      - run: node ledger/token-metadata.mjs
+        env:
+          LEDGER_SHEET_ID: 1vDH6lXF_xegq8pWzGdDgHJPwnmpmoDXZoMaWj967UtM
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          GOOGLE_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
+          COLLECTION: ${{ inputs.collection }}
+          IDS: ${{ inputs.ids }}
