@@ -1,9 +1,22 @@
 {
+  "rewrites": [
+    { "source": "/api/sheets", "destination": "/archive/w3rld-cup/sheets.json" },
+    { "source": "/api/scores", "destination": "/archive/w3rld-cup/scores.json" },
+    { "source": "/api/editions", "destination": "/archive/w3rld-cup/editions.json" }
+  ],
   "headers": [
     {
       "source": "/archive/(.*)",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Cache-Control", "value": "public, max-age=3600, s-maxage=86400" }
+      ]
+    },
+    {
+      "source": "/api/(sheets|scores|editions)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Content-Type", "value": "application/json; charset=utf-8" },
         { "key": "Cache-Control", "value": "public, max-age=3600, s-maxage=86400" }
       ]
     }
