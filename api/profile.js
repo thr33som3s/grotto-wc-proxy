@@ -41,10 +41,12 @@ export default async function handler(req, res) {
 }
 
 export async function usernameProblem(username, wallet) {
-  if (!USERNAME_RE.test(username)) return "usernames use letters, numbers, spaces, _ - or ., up to 24 characters";
   const u = username.toLowerCase();
   const [{ allowlist = [] }, { profiles = [] }] = await Promise.all([store("get_allowlist"), store("list_profiles")]);
   const reserved = allowlist.find((a) => String(a.username).toLowerCase() === u);
+  // A collector's own allowlist name is canon: accepted exactly as listed, with no format rule.
+  const own = reserved && reserved.wallet === wallet && reserved.username === username;
+  if (!own && !USERNAME_RE.test(username)) return "usernames use letters, numbers, spaces, _ - or ., up to 24 characters";
   if (reserved && reserved.wallet !== wallet)
     return "that username belongs to a different wallet. if you believe that's an error, contact thr33som3s. for now, choose a different username.";
   if (profiles.some((p) => String(p.username).toLowerCase() === u && p.wallet !== wallet)) return "that username is taken";
