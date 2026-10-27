@@ -8,6 +8,7 @@ import { store } from "./_lib/store.js";
 import { cors, body, walletFromReq } from "./_lib/session.js";
 import { publicProfile } from "./session.js";
 import { readHoldings } from "./_lib/ledger.js";
+import { THR33SOM3S_PFP } from "./_lib/pfp_thr33som3s.js";
 
 // New usernames: letters, numbers, . and _ only, up to 24 characters. No spaces or other characters.
 // Canon allowlist names (e.g. "chris trueman") are exempt and kept exactly as listed.
@@ -25,7 +26,19 @@ export async function holdsPiece(wallet, key) {
   return holdings.some((h) => h.wallet === wallet && h.key === key && h.balance > 0);
 }
 
+// GET /api/profile?image=thr33som3s serves a custom profile picture (no sign-in needed). It lives in this
+// file because Vercel's Hobby plan allows at most 12 functions (files in api/) per deployment.
+const CUSTOM_IMAGES = { thr33som3s: THR33SOM3S_PFP };
+
 export default async function handler(req, res) {
+  if (req.method === "GET" && req.query && req.query.image) {
+    const b64 = CUSTOM_IMAGES[String(req.query.image)];
+    if (!b64) return res.status(404).json({ error: "no such picture" });
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=86400");
+    return res.status(200).send(Buffer.from(b64, "base64"));
+  }
   cors(res);
   if (req.method === "OPTIONS") return res.status(204).end();
   const wallet = walletFromReq(req);
