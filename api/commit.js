@@ -1,11 +1,12 @@
-// GET  /api/commit?phase=candidacy                          -> window times and state; with a session, your entry if any
+// GET  /api/commit?phase=candidacy                          -> window times and state; with a session, your entry if any,
+//                                                               and which of its candidates have been burned to 333burn
 // POST /api/commit { phase, entries }                        -> checks the entry and returns the exact message to sign
 // POST /api/commit { phase, entries, issuedAt, signature }   -> stores the entry, final, once per wallet per phase
 // Entries for candidacy: [{ race: "KY", candidate: "univ3rs3:10001" }, ...]
 import { store } from "./_lib/store.js";
-import { readHoldings } from "./_lib/ledger.js";
+import { readHoldings, readTransfers } from "./_lib/ledger.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
-import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE } from "./_lib/l3ction.js";
+import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -20,7 +21,9 @@ export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
       const mine = wallet ? (await store("get_commitment", { phase: storedPhase(phase), wallet })).commitment : null;
-      return res.status(200).json({ phase, window: win, races: RACES, entry: mine });
+      // Burn confirmations: which committed candidates the ledger has seen arrive at 333burn.
+      const burns = mine && phase === "candidacy" ? candidacyBurns(mine, wallet, await readTransfers(KEY), win) : null;
+      return res.status(200).json({ phase, window: win, races: RACES, entry: mine, burns });
     }
     if (req.method !== "POST") return res.status(405).json({ error: "GET or POST" });
     if (!wallet) return res.status(401).json({ error: "sign in first" });

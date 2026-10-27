@@ -46,3 +46,9 @@ export async function readImages(key) {
     return out;
   } catch { return new Map(); }
 }
+
+// Every transfer the ledger has recorded: { chain, coll, id, key, from, to, amount, type, block, time, tx }.
+export async function readTransfers(key) {
+  return (await tab("transfers", "L", key)).map(([chain, coll, , id, from, to, amount, type, block, time, tx]) =>
+    ({ chain, coll, id, key: tokenKey(coll, id), from, to, amount: +amount, type, block: +block, time, tx }));
+}

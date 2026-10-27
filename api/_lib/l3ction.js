@@ -45,3 +45,26 @@ export function candidacyMessage(wallet, entries, names, issuedAt) {
   const lines = entries.slice().sort((a, b) => (a.race < b.race ? -1 : 1)).map((e) => `${e.race}: ${names[e.candidate] || e.candidate} (${e.candidate})`);
   return `thr33som3s 2026 3l3ction\ncandidacy entry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${lines.join("\n")}\n\n${COMMIT_PLEDGE}\n\nSigning is free and moves nothing now.`;
 }
+
+// Where committed pieces go (rules: candidates and team cards burn via 333burn; inserts and votes to 3vault).
+export const DESTINATIONS = {
+  "333burn": "0x3d373231a0a60bb6203fd1a91e3f058100c2244d",
+  "3vault": "0xe5a97ce51460114e13b632df211896c663cbae76",
+};
+
+// Which committed candidates the ledger shows arriving at 333burn from the collector during the
+// confirmation window (in rehearsal mode: any time after the entry was submitted).
+// Returns { "univ3rs3:10010": { tx, time }, ... }.
+export function candidacyBurns(entry, wallet, transfers, win) {
+  const want = new Set((entry?.payload?.entries || []).map((e) => e.candidate));
+  const from = TEST_MODE ? Date.parse(entry.submitted_at) : Date.parse(win.confirmOpens);
+  const to = TEST_MODE ? Infinity : Date.parse(win.confirmCloses);
+  const out = {};
+  for (const t of transfers) {
+    if (t.from !== wallet || t.to !== DESTINATIONS["333burn"] || !want.has(t.key) || t.amount < 1) continue;
+    const at = Date.parse(t.time);
+    if (!(at >= from && at <= to)) continue;
+    if (!out[t.key]) out[t.key] = { tx: t.tx, time: t.time };
+  }
+  return out;
+}
