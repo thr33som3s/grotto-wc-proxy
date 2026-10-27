@@ -37,8 +37,11 @@ export async function candidatePool(key) {
     .map((t) => [t.key, t]));
 }
 
+// The pledge every collector signs with their entry (thr33s's wording).
+export const COMMIT_PLEDGE = "YOU ARE COMMITTING THESE TOKENS TO BURN. THIS IS A SACRED ACT IN THE PROJECT. DO NOT SELL OR TRADE ANY OF YOUR COMMITS BEFORE THE CONFIRMATION WINDOW. YOU ARE RESPONSIBLE FOR BURNING THESE COMMITS. ANY FAILURE TO DO SO WILL RESULT IN SANCTIONS IN THE PROJECT AND MAY JEOPARDIZE YOUR PARTICIPATION IN THIS 3V3NT.";
+
 // The exact text a collector signs for their candidacy entry.
 export function candidacyMessage(wallet, entries, names, issuedAt) {
   const lines = entries.slice().sort((a, b) => (a.race < b.race ? -1 : 1)).map((e) => `${e.race}: ${names[e.candidate] || e.candidate} (${e.candidate})`);
-  return `thr33som3s 2026 3l3ction\ncandidacy entry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${lines.join("\n")}\n\nThese candidates will be burned in the confirmation window. Signing is free and moves nothing now.`;
+  return `thr33som3s 2026 3l3ction\ncandidacy entry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${lines.join("\n")}\n\n${COMMIT_PLEDGE}\n\nSigning is free and moves nothing now.`;
 }
