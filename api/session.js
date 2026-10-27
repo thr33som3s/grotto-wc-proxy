@@ -3,6 +3,7 @@
 // Sign in with a free wallet signature. Sessions last 90 minutes.
 import { store } from "./_lib/store.js";
 import { cors, body, isAddress, signInMessage, verifySignIn, issueToken, SESSION_MINUTES } from "./_lib/session.js";
+import { holdsPiece } from "./profile.js";
 
 export default async function handler(req, res) {
   cors(res);
@@ -18,7 +19,9 @@ export default async function handler(req, res) {
     const wallet = verifySignIn(body(req));
     const [{ profile }, allow] = await Promise.all([store("get_profile", { wallet }), store("get_allowlist")]);
     const listed = (allow.allowlist || []).find((a) => a.wallet === wallet);
-    res.status(200).json({ token: issueToken(wallet), wallet, expiresInMinutes: SESSION_MINUTES, profile: profile ? publicProfile(profile, true) : null, suggestedUsername: profile ? null : listed ? listed.username : null });
+    // Sign-in is the sweep: if the profile painting has left the wallet, the page asks for a new one.
+    const pfpStale = profile ? !(await holdsPiece(wallet, profile.pfp)) : false;
+    res.status(200).json({ token: issueToken(wallet), wallet, expiresInMinutes: SESSION_MINUTES, profile: profile ? publicProfile(profile, true) : null, pfpStale, suggestedUsername: profile ? null : listed ? listed.username : null });
   } catch (e) { res.status(400).json({ error: e.message }); }
 }
 export function publicProfile(p, own) {
