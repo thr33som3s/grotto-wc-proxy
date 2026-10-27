@@ -16,7 +16,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Profile pictures are one of the collector's own thr33som3s pieces, stored as its key ("univ3rs3:3010").
 // Required. No uploaded images are accepted or stored.
 const PFP_RE = /^(univ3rs3|bulk|thr33zi3s|gen2|gen3|guest):\d+$/;
+// Custom pictures, one per wallet: thr33som3s's own wallet uses the 333 logo. Nobody else has one.
+export const CUSTOM_PFPS = { "0xfe917312344b4ed3283c5e142868cd3eaa782933": "custom:thr33som3s" };
 export async function holdsPiece(wallet, key) {
+  if (key && CUSTOM_PFPS[wallet] === key) return true;
   if (!PFP_RE.test(key || "")) return false;
   const holdings = await readHoldings(process.env.GOOGLE_API_KEY);
   return holdings.some((h) => h.wallet === wallet && h.key === key && h.balance > 0);
@@ -34,7 +37,7 @@ export default async function handler(req, res) {
     const b = body(req);
     const pfp = String(b.pfp || "");
     const pfpProblem = async () =>
-      !PFP_RE.test(pfp) ? "choose one of your thr33som3s paintings as your profile picture"
+      !(PFP_RE.test(pfp) || CUSTOM_PFPS[wallet] === pfp) ? "choose one of your thr33som3s paintings as your profile picture"
       : !(await holdsPiece(wallet, pfp)) ? "that painting isn't in your collection; choose one you hold" : null;
     const email = String(b.email || "").trim();
     if (email && !EMAIL_RE.test(email)) return res.status(400).json({ error: "that email address doesn't look right" });
