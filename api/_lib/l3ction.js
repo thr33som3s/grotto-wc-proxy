@@ -25,17 +25,65 @@ export function windowState(phase, now = Date.now()) {
 export const RACES = [["AL","Alabama"],["AK","Alaska"],["AR","Arkansas"],["CO","Colorado"],["DE","Delaware"],["FL","Florida (special)"],["GA","Georgia"],["ID","Idaho"],["IL","Illinois"],["IA","Iowa"],["KS","Kansas"],["KY","Kentucky"],["LA","Louisiana"],["ME","Maine"],["MA","Massachusetts"],["MI","Michigan"],["MN","Minnesota"],["MS","Mississippi"],["MT","Montana"],["NE","Nebraska"],["NH","New Hampshire"],["NJ","New Jersey"],["NM","New Mexico"],["NC","North Carolina"],["OH","Ohio (special)"],["OK","Oklahoma"],["OR","Oregon"],["RI","Rhode Island"],["SC","South Carolina"],["SD","South Dakota"],["TN","Tennessee"],["TX","Texas"],["VA","Virginia"],["WV","West Virginia"],["WY","Wyoming"]];
 export const RACE_CODES = new Set(RACES.map(([c]) => c));
 
-// Candidate pool: univ3rs3 Base cards whose team is Candidates (rules §4.1, builder pool "Candidates").
-export async function candidatePool(key) {
+// univ3rs3 metadata, read once per warm instance for 2 minutes.
+let univMemo = null;
+export const resetUniv3rs3Memo = () => { univMemo = null; }; // for tests
+export async function univ3rs3Tokens(key) {
+  if (univMemo && Date.now() - univMemo.at < 120000) return univMemo.tokens;
   const c = COLLECTIONS.find((x) => x.key === "univ3rs3");
   const api = "https://sheets.googleapis.com/v4/spreadsheets";
   const meta = await (await fetch(`${api}/${c.sheet}?fields=sheets.properties.title&key=${key}`)).json();
   const title = meta.sheets[0].properties.title;
   const data = await (await fetch(`${api}/${c.sheet}/values/${encodeURIComponent(`'${title}'!A:BF`)}?key=${key}`)).json();
-  return new Map(buildCollection(c, data.values || [])
-    .filter((t) => String(t.traits.team || "").toLowerCase() === "candidates" && String(t.traits.card_type || "").toLowerCase() === "base")
+  const tokens = buildCollection(c, data.values || []);
+  univMemo = { at: Date.now(), tokens };
+  return tokens;
+}
+const lc = (v) => String(v || "").toLowerCase();
+
+// Candidate pool: univ3rs3 Base cards whose team is Candidates (rules §4.1, builder pool "Candidates").
+export async function candidatePool(key) {
+  return new Map((await univ3rs3Tokens(key))
+    .filter((t) => lc(t.traits.team) === "candidates" && lc(t.traits.card_type) === "base")
     .map((t) => [t.key, t]));
 }
+
+// ── Demographics (rules §3) ──────────────────────────────────────
+// Team demographics: univ3rs3 Base, Painted and Award cards of these teams. Participants: any univ3rs3
+// Participants card except Madn3ss. Insert demographics: these exact tokens.
+export const TEAM_DEMOGRAPHICS = ["NFTs", "Monsters", "Exes", "Subs", "Cat Moms", "Cardinali", "Coders", "Elephant Men"];
+const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+const u = (ids) => ids.map((i) => `univ3rs3:${i}`);
+export const TOKEN_DEMOGRAPHICS = {
+  "Leathers": u(range(319002, 319005)),
+  "Dads to Be": u([313001, 313002, 313003, 318010, 80004]),
+  "Daddies to Be": u(range(34401, 34404)),
+  "High Waisted Brothers": u([317017]),
+  "Stadium Parking Attendants": u([318020]),
+  "Trash Bros": ["univ3rs3:319009", "bulk:319007", "bulk:319008"],
+  "Dead Dads": u(range(11001, 11004)),
+  "Butchers": u(range(11005, 11008)),
+  "Lab Rats": u(range(11009, 11012)),
+};
+const TOKEN_DEMO_BY_KEY = Object.fromEntries(Object.entries(TOKEN_DEMOGRAPHICS).flatMap(([d, ks]) => ks.map((k) => [k, d])));
+// The demographic a piece belongs to, or null. t: a catalog token ({ key, coll, traits }).
+export function demographicOf(t) {
+  if (TOKEN_DEMO_BY_KEY[t.key]) return TOKEN_DEMO_BY_KEY[t.key];
+  if (t.coll !== "univ3rs3") return null;
+  const team = TEAM_DEMOGRAPHICS.find((x) => lc(x) === lc(t.traits.team));
+  const type = lc(t.traits.card_type);
+  if (team && ["base", "painted", "award"].includes(type)) return team;
+  if (lc(t.traits.team) === "participants" && type !== "madn3ss") return "Participants";
+  return null;
+}
+// Burnable inserts (rules §3.2): any univ3rs3 Insert, and any bulk piece.
+export const isBurnable = (t) => t.coll === "bulk" || (t.coll === "univ3rs3" && lc(t.traits.card_type) === "insert");
+
+// Placement scale (rules §3.2, §3.4). Level n (1–6) gives CAPACITY[n-1] placements.
+export const CAPACITY = [5, 10, 15, 20, 25, 35];
+const STANDARD = [0, 500, 400, 300, 200, 100];
+const STRADDLE = [500, 500, 400, 300, 200, 100];
+export const insertCost = (kind, tiers) => (kind === "straddle" ? STRADDLE : STANDARD).slice(0, tiers).reduce((a, b) => a + b, 0);
 
 // The pledge every collector signs with their entry (thr33s's wording).
 export const COMMIT_PLEDGE = "YOU ARE COMMITTING THESE TOKENS TO BURN. THIS IS A SACRED ACT IN THE PROJECT. DO NOT SELL OR TRADE ANY OF YOUR COMMITS BEFORE THE CONFIRMATION WINDOW. YOU ARE RESPONSIBLE FOR BURNING THESE COMMITS, ANY FAILURE TO DO SO WILL RESULT IN SANCTIONS IN THE PROJECT AND MAY JEOPARDIZE YOUR PARTICIPATION IN THIS 3V3NT.";
@@ -54,13 +102,14 @@ export const DESTINATIONS = {
 
 // Confirmation status for any committed pieces. items: [{ key, dest: "333burn" | "3vault", qty }].
 // Counts what the ledger shows moving from the wallet to each item's destination between fromMs and toMs.
-// Returns { key: { dest, qty, sent, txs: [...] } }.
+// Returns { "key>dest": { key, dest, qty, sent, txs: [...] } }.
 export function sentTo(items, wallet, transfers, fromMs, toMs) {
   const out = {};
-  for (const it of items) out[it.key] = { dest: it.dest, qty: it.qty, sent: 0, txs: [] };
+  for (const it of items) { const k = `${it.key}>${it.dest}`; out[k] = out[k] || { key: it.key, dest: it.dest, qty: 0, sent: 0, txs: [] }; out[k].qty += it.qty; }
+  const byDest = Object.fromEntries(Object.entries(DESTINATIONS).map(([n, a]) => [a, n]));
   for (const t of transfers) {
-    const o = out[t.key];
-    if (!o || t.from !== wallet || t.to !== DESTINATIONS[o.dest]) continue;
+    const o = out[`${t.key}>${byDest[t.to]}`];
+    if (!o || t.from !== wallet) continue;
     const at = Date.parse(t.time);
     if (!(at >= fromMs && at <= toMs)) continue;
     o.sent += t.amount;
@@ -79,6 +128,82 @@ export function candidacyBurns(entry, wallet, transfers, win) {
   const [from, to] = confirmSpan(entry, win);
   const st = sentTo(items, wallet, transfers, from, to);
   const out = {};
-  for (const [k, v] of Object.entries(st)) if (v.sent >= 1) out[k] = { tx: v.txs[0] };
+  for (const v of Object.values(st)) if (v.sent >= 1) out[v.key] = { tx: v.txs[0] };
   return out;
+}
+
+// What a demographics entry moves: added-team cards to 333burn (1 each), inserts to 3vault.
+export function demographicsItems(payload) {
+  const items = [];
+  for (const d of payload.demographics || []) if (d.kind === "added") items.push({ key: d.card, dest: "333burn", qty: 1 });
+  for (const i of payload.inserts || []) items.push({ key: i.key, dest: "3vault", qty: i.qty });
+  return items;
+}
+
+// Rules §3: checks a demographics entry against the collector's holdings.
+// tokens: Map key -> catalog token (univ3rs3); held: Map key -> balance (any collection).
+export function checkDemographics(payload, tokens, held) {
+  const out = [];
+  const order = { free: 0, added: 1, straddle: 2 };
+  const demos = (Array.isArray(payload.demographics) ? payload.demographics : []).slice().sort((a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3));
+  const inserts = Array.isArray(payload.inserts) ? payload.inserts : [];
+  if (!demos.length) out.push("add at least one demographic");
+  const tok = (k) => tokens.get(k) || (k.startsWith("bulk:") ? { key: k, coll: "bulk", traits: {} } : null);
+  const use = new Map(); const addUse = (k, n) => use.set(k, (use.get(k) || 0) + n);
+  const teams = new Map(); // team -> color (free/added)
+  let free = 0, added = 0, cost = 0;
+  const straddled = new Set();
+  for (const d of demos) {
+    if (!["free", "added", "straddle"].includes(d.kind)) { out.push("unknown demographic kind"); continue; }
+    if (d.color !== "red" && d.color !== "blue") out.push("each demographic needs red or blue");
+    const tiers = Number(d.tiers);
+    if (!(Number.isInteger(tiers) && tiers >= 1 && tiers <= 6)) { out.push("block level must be 1 to 6"); continue; }
+    const races = Array.isArray(d.races) ? d.races : [];
+    if (new Set(races).size !== races.length) out.push("a demographic can be placed in a race only once");
+    if (races.some((r) => !RACE_CODES.has(r))) out.push("unknown race");
+    if (races.length > CAPACITY[tiers - 1]) out.push(`too many races for ${CAPACITY[tiers - 1]} placements`);
+    cost += insertCost(d.kind, tiers);
+    if (d.kind === "straddle") {
+      const other = teams.get(d.team);
+      if (!other) out.push(`straddle: declare ${d.team} first`);
+      else if (other === d.color) out.push(`straddle: ${d.team} must be the other color`);
+      if (straddled.has(d.team)) out.push(`only one straddle for ${d.team}`);
+      straddled.add(d.team);
+      continue;
+    }
+    const t = d.card && tok(d.card);
+    const team = t && demographicOf(t);
+    if (!team) { out.push("choose a demographic card"); continue; }
+    if (d.team && d.team !== team) out.push("card and demographic don't match");
+    if (teams.has(team)) out.push(`${team} is already one of your teams; use a straddle for the other color`);
+    teams.set(team, d.color);
+    d.team = team;
+    if (d.kind === "free") { free++; addUse(d.card, 1); } else { added++; addUse(d.card, 1); }
+  }
+  if (free > 1) out.push("only one free demographic");
+  if (added > 4) out.push("at most 4 added teams");
+  let total = 0;
+  for (const i of inserts) {
+    const q = Number(i.qty), t = tok(i.key);
+    if (!(Number.isInteger(q) && q >= 1)) { out.push("insert quantities must be whole numbers"); continue; }
+    if (!t || !isBurnable(t)) { out.push(`${i.key} isn't a burnable insert`); continue; }
+    addUse(i.key, q); total += q;
+  }
+  if (total !== cost) out.push(`your placements cost ${cost} inserts but ${total} are selected`);
+  for (const [k, n] of use) if ((held.get(k) || 0) < n) out.push(`you don't hold enough of ${tokens.get(k)?.name || k} (need ${n}, hold ${held.get(k) || 0})`);
+  return { problems: [...new Set(out)], cost };
+}
+
+// The exact text a collector signs for their demographics entry.
+export function demographicsMessage(wallet, payload, names, issuedAt) {
+  const nm = (k) => names[k] || k;
+  const lines = (payload.demographics || []).map((d) => {
+    const base = `${d.kind} · ${d.team} (${d.color}) · ${CAPACITY[d.tiers - 1]} placements · races: ${(d.races || []).join(", ") || "none"}`;
+    if (d.kind === "free") return `${base}\n  card held, keep at least 1: ${nm(d.card)}`;
+    if (d.kind === "added") return `${base}\n  card to burn (333burn): ${nm(d.card)}`;
+    return base;
+  });
+  const ins = (payload.inserts || []).map((i) => `  ${nm(i.key)} x${i.qty}`);
+  const total = (payload.inserts || []).reduce((a, i) => a + Number(i.qty), 0);
+  return `thr33som3s 2026 3l3ction\ndemographics entry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${lines.join("\n")}\n\ninserts to 3vault: ${total}\n${ins.join("\n")}\n\n${COMMIT_PLEDGE}\n\nSigning is free and moves nothing now.`;
 }

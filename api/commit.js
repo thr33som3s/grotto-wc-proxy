@@ -3,10 +3,12 @@
 // POST /api/commit { phase, entries }                        -> checks the entry and returns the exact message to sign
 // POST /api/commit { phase, entries, issuedAt, signature }   -> stores the entry, final, once per wallet per phase
 // Entries for candidacy: [{ race: "KY", candidate: "univ3rs3:10001" }, ...]
+// Demographics: { demographics: [{ kind: free|added|straddle, card?, team?, color, tiers, races }], inserts: [{ key, qty }] }
 import { store } from "./_lib/store.js";
 import { readHoldings, readTransfers } from "./_lib/ledger.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
-import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns } from "./_lib/l3ction.js";
+import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
+  univ3rs3Tokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -23,19 +25,26 @@ export default async function handler(req, res) {
       const mine = wallet ? (await store("get_commitment", { phase: storedPhase(phase), wallet })).commitment : null;
       // Burn confirmations: which committed candidates the ledger has seen arrive at 333burn.
       const burns = mine && phase === "candidacy" ? candidacyBurns(mine, wallet, await readTransfers(KEY), win) : null;
-      return res.status(200).json({ phase, window: win, races: RACES, entry: mine, burns });
+      // Demographics: how much of each committed piece has reached its destination ("key>dest" -> qty sent).
+      let sent = null;
+      if (mine && phase === "demographics") {
+        const [from, to] = confirmSpan(mine, win);
+        sent = Object.fromEntries(Object.entries(sentTo(demographicsItems(mine.payload), wallet, await readTransfers(KEY), from, to)).map(([k, v]) => [k, v.sent]));
+      }
+      return res.status(200).json({ phase, window: win, races: RACES, entry: mine, burns, sent });
     }
     if (req.method !== "POST") return res.status(405).json({ error: "GET or POST" });
     if (!wallet) return res.status(401).json({ error: "sign in first" });
-    if (phase !== "candidacy") return res.status(400).json({ error: `${phase} submissions open later` });
-    if (!win.commitOpen) return res.status(403).json({ error: "the candidacy window is not open" });
+    if (phase !== "candidacy" && phase !== "demographics") return res.status(400).json({ error: `${phase} submissions open later` });
+    if (!win.commitOpen) return res.status(403).json({ error: `the ${phase} window is not open` });
 
     const { profile } = await store("get_profile", { wallet });
     if (!profile) return res.status(403).json({ error: "create a profile first" });
     const existing = (await store("get_commitment", { phase: storedPhase(phase), wallet })).commitment;
-    if (existing) return res.status(409).json({ error: "you already submitted your candidacy entry; it is final", entry: existing });
+    if (existing) return res.status(409).json({ error: `you already submitted your ${phase} entry; it is final`, entry: existing });
 
     const b = body(req);
+    if (phase === "demographics") return demographics(req, res, b, wallet, KEY);
     const entries = Array.isArray(b.entries) ? b.entries.map((e) => ({ race: String(e.race || "").toUpperCase(), candidate: String(e.candidate || "") })) : [];
     const [pool, holdings] = await Promise.all([candidatePool(KEY), readHoldings(KEY)]);
     const problems = checkCandidacy(entries, wallet, pool, holdings, { skipHolding: TEST_MODE });
@@ -54,6 +63,34 @@ export default async function handler(req, res) {
     if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your candidacy entry; it is final" : r.error });
     res.status(201).json({ ok: true, submitted_at: r.submitted_at, entries });
   } catch (e) { res.status(502).json({ error: e.message }); }
+}
+
+// Demographics entry (rules §3): check, return the text to sign, then store once signed.
+async function demographics(req, res, b, wallet, KEY) {
+  const clean = (d) => ({ kind: String(d.kind || ""), card: d.card ? String(d.card) : undefined, team: d.team ? String(d.team) : undefined,
+    color: String(d.color || ""), tiers: Number(d.tiers), races: Array.isArray(d.races) ? d.races.map((r) => String(r).toUpperCase()) : [] });
+  const payload = {
+    demographics: (Array.isArray(b.demographics) ? b.demographics : []).map(clean),
+    inserts: (Array.isArray(b.inserts) ? b.inserts : []).filter((i) => Number(i.qty) > 0).map((i) => ({ key: String(i.key), qty: Number(i.qty) })),
+  };
+  const [univ, holdings] = await Promise.all([univ3rs3Tokens(KEY), readHoldings(KEY)]);
+  const tokens = new Map(univ.map((t) => [t.key, t]));
+  const held = TEST_MODE ? { get: () => Infinity } : new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
+  const { problems } = checkDemographics(payload, tokens, held);
+  if (problems.length) return res.status(422).json({ error: problems[0], problems });
+  const keys = [...payload.demographics.map((d) => d.card).filter(Boolean), ...payload.inserts.map((i) => i.key)];
+  const names = Object.fromEntries(keys.map((k) => [k, tokens.get(k)?.name || k]));
+  if (!b.signature) {
+    const issuedAt = new Date().toISOString();
+    return res.status(200).json({ issuedAt, message: demographicsMessage(wallet, payload, names, issuedAt) });
+  }
+  const age = Date.now() - Date.parse(b.issuedAt);
+  if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
+  const message = demographicsMessage(wallet, payload, names, b.issuedAt);
+  if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
+  const r = await store("put_commitment", { phase: storedPhase("demographics"), wallet, payload, signature: b.signature, message });
+  if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your demographics entry; it is final" : r.error });
+  return res.status(201).json({ ok: true, submitted_at: r.submitted_at, payload });
 }
 
 // Rules §4.1: burn a 2024 candidate you hold to run it in one race; each candidate once; one per race.
