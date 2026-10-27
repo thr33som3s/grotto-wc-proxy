@@ -1,14 +1,15 @@
 // GET  /api/profile                      (signed in) -> your profile, including your email
 // POST /api/profile { username, pfp, email } (signed in) -> creates your profile, or updates pfp/email
-// Usernames: required, unique ignoring case, letters/numbers/spaces/_-., up to 24 characters, and fixed once
+// Usernames: required, unique ignoring case, letters/numbers/._ up to 24 characters, and fixed once
 // created (thr33s can change one in the private sheet). Names on thr33s's allowlist are reserved
 // for the wallet they're listed with.
 import { store } from "./_lib/store.js";
 import { cors, body, walletFromReq } from "./_lib/session.js";
 import { publicProfile } from "./session.js";
 
-// Letters, numbers, _ - . and single spaces between words (Grotto names like "chris trueman", "Mrs.Omac").
-export const USERNAME_RE = /^(?=.{1,24}$)[A-Za-z0-9_.-]+( [A-Za-z0-9_.-]+)*$/;
+// New usernames: letters, numbers, . and _ only, up to 24 characters. No spaces or other characters.
+// Canon allowlist names (e.g. "chris trueman") are exempt and kept exactly as listed.
+export const USERNAME_RE = /^[A-Za-z0-9._]{1,24}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_PFP = 40000; // characters of the data: URL; the page shrinks images to a small square first
 
@@ -48,7 +49,7 @@ export async function usernameProblem(username, wallet) {
   if (reserved && reserved.wallet !== wallet)
     return "that username belongs to a different wallet. if you believe that's an error, contact thr33som3s. for now, choose a different username.";
   const own = reserved && reserved.username === username;
-  if (!own && !USERNAME_RE.test(username)) return "usernames use letters, numbers, spaces, _ - or ., up to 24 characters";
+  if (!own && !USERNAME_RE.test(username)) return "usernames use letters, numbers, . and _ only (no spaces), up to 24 characters";
   if (profiles.some((p) => String(p.username).toLowerCase() === u && p.wallet !== wallet)) return "that username is taken";
   return null;
 }
