@@ -2,5 +2,8 @@
   "name": "grotto-wc-proxy",
   "version": "1.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "ethers": "5.7.2"
+  }
 }
