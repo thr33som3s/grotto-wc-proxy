@@ -1,13 +1,14 @@
 // GET  /api/profile                      (signed in) -> your profile, including your email
 // POST /api/profile { username, pfp, email } (signed in) -> creates your profile, or updates pfp/email
-// Usernames: required, unique ignoring case, letters/numbers/_/-, up to 24 characters, and fixed once
+// Usernames: required, unique ignoring case, letters/numbers/spaces/_-., up to 24 characters, and fixed once
 // created (thr33s can change one in the private sheet). Names on thr33s's allowlist are reserved
 // for the wallet they're listed with.
 import { store } from "./_lib/store.js";
 import { cors, body, walletFromReq } from "./_lib/session.js";
 import { publicProfile } from "./session.js";
 
-export const USERNAME_RE = /^[A-Za-z0-9_-]{1,24}$/;
+// Letters, numbers, _ - . and single spaces between words (Grotto names like "chris trueman", "Mrs.Omac").
+export const USERNAME_RE = /^(?=.{1,24}$)[A-Za-z0-9_.-]+( [A-Za-z0-9_.-]+)*$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_PFP = 40000; // characters of the data: URL; the page shrinks images to a small square first
 
@@ -40,7 +41,7 @@ export default async function handler(req, res) {
 }
 
 export async function usernameProblem(username, wallet) {
-  if (!USERNAME_RE.test(username)) return "usernames use letters, numbers, _ or -, up to 24 characters";
+  if (!USERNAME_RE.test(username)) return "usernames use letters, numbers, spaces, _ - or ., up to 24 characters";
   const u = username.toLowerCase();
   const [{ allowlist = [] }, { profiles = [] }] = await Promise.all([store("get_allowlist"), store("list_profiles")]);
   const reserved = allowlist.find((a) => String(a.username).toLowerCase() === u);
