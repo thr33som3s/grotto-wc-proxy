@@ -46,10 +46,17 @@ export function cleanValue(v) {
 // Full links in a sheet are kept exactly as written: the thr33som3s gateway only serves content
 // pinned to its own Pinata account, and the gen1/gen2 images are pinned elsewhere.
 // Bare CIDs (univ3rs3, bulk, gen3) and ipfs:// links go through the thr33som3s gateway.
-export function imageUrl(v) {
+// Collections whose images are now pinned to the thr33som3s Pinata account (pin-images job):
+// their full links are rerouted through the thr33som3s gateway too.
+export const PINNED_ON_OWN_GATEWAY = new Set(["thr33zi3s", "gen2"]);
+
+export function imageUrl(v, collKey) {
   const s = norm(v);
   if (!s) return "";
-  if (/^https?:\/\//i.test(s)) return s;
+  if (/^https?:\/\//i.test(s)) {
+    const i = s.indexOf("/ipfs/");
+    return PINNED_ON_OWN_GATEWAY.has(collKey) && i >= 0 ? IPFS_GATEWAY + s.slice(i + 6) : s;
+  }
   if (s.startsWith("ipfs://")) return IPFS_GATEWAY + s.slice(7);
   if (/^(Qm|baf)/.test(s)) return IPFS_GATEWAY + s;
   return s;
@@ -68,7 +75,7 @@ export function buildCollection(coll, rows) {
     header.forEach((f, j) => {
       const raw = r[j];
       if (f === "name") { t.name = norm(raw); return; }
-      if (f === "_image") { if (!t.image) t.image = imageUrl(raw); return; }
+      if (f === "_image") { if (!t.image) t.image = imageUrl(raw, coll.key); return; }
       if (!f || f.startsWith("_") || f === "token_id") return;
       const v = cleanValue(raw);
       if (!v) return;
