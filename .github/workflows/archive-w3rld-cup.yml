@@ -1,0 +1,27 @@
+name: archive-w3rld-cup
+# One-time: freeze what the W3rld Cup endpoints return today into static files in the repo.
+# The live functions are then retired; their addresses will serve these files instead.
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture the three endpoints
+        run: |
+          mkdir -p public/archive/w3rld-cup
+          for e in sheets scores editions; do
+            curl -sSf "https://grotto-wc-proxy.vercel.app/api/$e" -o "public/archive/w3rld-cup/$e.json"
+            node -e "const j=JSON.parse(require('fs').readFileSync('public/archive/w3rld-cup/$e.json','utf8')); if (j.error) { console.error('$e returned an error: '+j.error); process.exit(1) } console.log('$e ok', JSON.stringify(j).length, 'bytes')"
+          done
+      - name: Commit the archive
+        run: |
+          git config user.name "archive job"
+          git config user.email "3s@thr33som3s.com"
+          git add public/archive/w3rld-cup
+          git commit -m "Archive: W3rld Cup endpoint responses, frozen $(date -u +%Y-%m-%d)"
+          git push
