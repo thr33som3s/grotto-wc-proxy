@@ -5,7 +5,7 @@
 import { store } from "./_lib/store.js";
 import { readHoldings } from "./_lib/ledger.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
-import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage } from "./_lib/l3ction.js";
+import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -35,7 +35,7 @@ export default async function handler(req, res) {
     const b = body(req);
     const entries = Array.isArray(b.entries) ? b.entries.map((e) => ({ race: String(e.race || "").toUpperCase(), candidate: String(e.candidate || "") })) : [];
     const [pool, holdings] = await Promise.all([candidatePool(KEY), readHoldings(KEY)]);
-    const problems = checkCandidacy(entries, wallet, pool, holdings);
+    const problems = checkCandidacy(entries, wallet, pool, holdings, { skipHolding: TEST_MODE });
     if (problems.length) return res.status(422).json({ error: problems[0], problems });
     const names = Object.fromEntries(entries.map((e) => [e.candidate, pool.get(e.candidate).name]));
 
@@ -54,7 +54,9 @@ export default async function handler(req, res) {
 }
 
 // Rules §4.1: burn a 2024 candidate you hold to run it in one race; each candidate once; one per race.
-export function checkCandidacy(entries, wallet, pool, holdings) {
+// In rehearsal mode (preview deployments only) the holding check is skipped, so any wallet can
+// rehearse with any candidate. Entries are filed under "candidacy-test" and never count.
+export function checkCandidacy(entries, wallet, pool, holdings, { skipHolding = false } = {}) {
   const out = [];
   if (!entries.length) out.push("choose at least one candidate");
   const held = new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
@@ -62,7 +64,7 @@ export function checkCandidacy(entries, wallet, pool, holdings) {
   for (const e of entries) {
     if (!RACE_CODES.has(e.race)) out.push(`unknown race ${e.race}`);
     if (!pool.has(e.candidate)) out.push(`${e.candidate} is not a 2024 candidate card`);
-    else if (!(held.get(e.candidate) > 0)) out.push(`your wallet doesn't hold ${pool.get(e.candidate).name}`);
+    else if (!skipHolding && !(held.get(e.candidate) > 0)) out.push(`your wallet doesn't hold ${pool.get(e.candidate).name}`);
     if (races.has(e.race)) out.push(`only one candidate per race (${e.race})`);
     if (cands.has(e.candidate)) out.push(`each candidate can run once (${pool.get(e.candidate)?.name || e.candidate})`);
     races.add(e.race); cands.add(e.candidate);
