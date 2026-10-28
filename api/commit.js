@@ -8,7 +8,7 @@ import { store } from "./_lib/store.js";
 import { readHoldings, readTransfers, readUsResults } from "./_lib/ledger.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
-  univ3rs3Tokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, contestedBallots,
+  univ3rs3Tokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, candidateRaces, shortName,
   candidacyIndex, demographicsIndex } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
@@ -69,15 +69,18 @@ export default async function handler(req, res) {
 }
 
 // GET /api/commit?phase=map: public data for the 3l3ction map page. Races, the schedule, the US calls,
-// and (after candidacy confirmations close) contested races with their candidates. Grotto results come later.
+// the number of confirmed candidates (once candidacy confirmations close), and every race with a candidate
+// and who the candidates are (once demographics entries close). Who ran them stays private until results.
 async function map(res, KEY) {
   res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=120");
   const now = Date.now();
-  const out = { races: RACES, schedule: PHASES, us: await readUsResults(KEY), ballots: null, generatedAt: new Date().toISOString() };
+  const out = { races: RACES, schedule: PHASES, us: await readUsResults(KEY), candidateCount: null, ballots: null, generatedAt: new Date().toISOString() };
   if (now > Date.parse(PHASES.candidacy.confirmCloses)) {
     const [{ commitments = [] }, transfers, univ] = await Promise.all([store("list_commitments", { phase: "candidacy" }), readTransfers(KEY), univ3rs3Tokens(KEY)]);
-    const names = Object.fromEntries(univ.map((t) => [t.key, t.name]));
-    out.ballots = contestedBallots(commitments, transfers, names);
+    const names = Object.fromEntries(univ.map((t) => [t.key, shortName(t.name)]));
+    const cr = candidateRaces(commitments, transfers, names);
+    out.candidateCount = cr.total;
+    if (now > Date.parse(PHASES.demographics.commitCloses)) out.ballots = cr.races;
   }
   return res.status(200).json(out);
 }

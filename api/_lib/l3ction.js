@@ -211,24 +211,28 @@ export function demographicsMessage(wallet, payload, names, issuedAt) {
 }
 
 // ── The 3l3ction map (public) ────────────────────────────────────
-// Contested races and their candidate names, from candidacy entries whose burns were confirmed.
-// Revealed only once candidacy confirmations have closed (rules §6.2: ballots show contested races only).
-export function contestedBallots(entries, transfers, candidateNames) {
+// Every race with a confirmed (burned) candidate, and its candidates. Revealed once demographics entries
+// close (thr33s, Oct 28 pod): collectors place demographics without knowing where candidates run.
+// Returns { races: { KY: { candidates: ["Franklin DeSoto", ...], runs: 3, contested: true } }, total: n }.
+export function candidateRaces(entries, transfers, candidateNames) {
   const win = windowState("candidacy");
   const byRace = new Map();
+  let total = 0;
   for (const e of entries) {
     const burned = candidacyBurns({ submitted_at: e.submitted_at, payload: e.payload }, e.wallet, transfers, win);
     for (const x of e.payload?.entries || []) {
       if (!burned[x.candidate]) continue;            // only candidates actually burned run
       const name = candidateNames[x.candidate] || x.candidate;
-      if (!byRace.has(x.race)) byRace.set(x.race, new Set());
-      byRace.get(x.race).add(name);
+      if (!byRace.has(x.race)) byRace.set(x.race, { names: new Set(), runs: 0 });
+      const r = byRace.get(x.race); r.names.add(name); r.runs++; total++;
     }
   }
-  const out = {};
-  for (const [race, names] of byRace) if (names.size >= 2) out[race] = [...names].sort();
-  return out;
+  const races = {};
+  for (const [race, r] of byRace) races[race] = { candidates: [...r.names].sort(), runs: r.runs, contested: r.names.size >= 2 };
+  return { races, total };
 }
+// Short display name: "Franklin DeSoto, 1973 Candidates, Series 10, #010" -> "Franklin DeSoto".
+export const shortName = (n) => String(n || "").split(", ")[0];
 
 // ── Sorted views for the private store ───────────────────────────
 // Sent with each entry so the store can keep tabs that read in order (who runs what, where).
