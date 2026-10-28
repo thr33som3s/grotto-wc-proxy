@@ -209,3 +209,23 @@ export function demographicsMessage(wallet, payload, names, issuedAt) {
   const total = (payload.inserts || []).reduce((a, i) => a + Number(i.qty), 0);
   return `thr33som3s 2026 3l3ction\ndemographics entry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${lines.join("\n")}\n\ninserts to 3vault: ${total}\n${ins.join("\n")}\n\n${COMMIT_PLEDGE}\n\nSigning is free and moves nothing now.`;
 }
+
+// ── The 3l3ction map (public) ────────────────────────────────────
+// Contested races and their candidate names, from candidacy entries whose burns were confirmed.
+// Revealed only once candidacy confirmations have closed (rules §6.2: ballots show contested races only).
+export function contestedBallots(entries, transfers, candidateNames) {
+  const win = windowState("candidacy");
+  const byRace = new Map();
+  for (const e of entries) {
+    const burned = candidacyBurns({ submitted_at: e.submitted_at, payload: e.payload }, e.wallet, transfers, win);
+    for (const x of e.payload?.entries || []) {
+      if (!burned[x.candidate]) continue;            // only candidates actually burned run
+      const name = candidateNames[x.candidate] || x.candidate;
+      if (!byRace.has(x.race)) byRace.set(x.race, new Set());
+      byRace.get(x.race).add(name);
+    }
+  }
+  const out = {};
+  for (const [race, names] of byRace) if (names.size >= 2) out[race] = [...names].sort();
+  return out;
+}

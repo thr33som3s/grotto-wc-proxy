@@ -52,3 +52,17 @@ export async function readTransfers(key) {
   return (await tab("transfers", "L", key)).map(([chain, coll, , id, from, to, amount, type, block, time, tx]) =>
     ({ chain, coll, id, key: tokenKey(coll, id), from, to, amount: +amount, type, block: +block, time, tx }));
 }
+
+// US Senate calls written by the us-results job; thr33s's override column wins when filled.
+export async function readUsResults(key) {
+  try {
+    const out = {};
+    for (const [race, called, winner, party, color, source, updated, override] of await tab("us-results", "H", key)) {
+      if (!race) continue;
+      const o = String(override || "").trim().toLowerCase();
+      out[race] = o ? { called: true, color: ["red", "blue", "purple"].includes(o) ? o : "", winner: "", party: o, source: "thr33s", updated }
+                    : { called: called === "yes", color: color || "", winner: winner || "", party: party || "", source: source || "", updated };
+    }
+    return out;
+  } catch { return {}; }
+}

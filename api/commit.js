@@ -5,10 +5,10 @@
 // Entries for candidacy: [{ race: "KY", candidate: "univ3rs3:10001" }, ...]
 // Demographics: { demographics: [{ kind: free|added|straddle, card?, team?, color, tiers, races }], inserts: [{ key, qty }] }
 import { store } from "./_lib/store.js";
-import { readHoldings, readTransfers } from "./_lib/ledger.js";
+import { readHoldings, readTransfers, readUsResults } from "./_lib/ledger.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
-  univ3rs3Tokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan } from "./_lib/l3ction.js";
+  univ3rs3Tokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, contestedBallots } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -18,6 +18,7 @@ export default async function handler(req, res) {
   const KEY = process.env.GOOGLE_API_KEY;
   const wallet = walletFromReq(req);
   const phase = String((req.method === "GET" ? req.query.phase : body(req).phase) || "");
+  if (req.method === "GET" && phase === "map") return map(res, KEY);
   const win = windowState(phase);
   if (!win) return res.status(400).json({ error: "unknown phase" });
   try {
@@ -63,6 +64,20 @@ export default async function handler(req, res) {
     if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your candidacy entry; it is final" : r.error });
     res.status(201).json({ ok: true, submitted_at: r.submitted_at, entries });
   } catch (e) { res.status(502).json({ error: e.message }); }
+}
+
+// GET /api/commit?phase=map: public data for the 3l3ction map page. Races, the schedule, the US calls,
+// and (after candidacy confirmations close) contested races with their candidates. Grotto results come later.
+async function map(res, KEY) {
+  res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=120");
+  const now = Date.now();
+  const out = { races: RACES, schedule: PHASES, us: await readUsResults(KEY), ballots: null, generatedAt: new Date().toISOString() };
+  if (now > Date.parse(PHASES.candidacy.confirmCloses)) {
+    const [{ commitments = [] }, transfers, univ] = await Promise.all([store("list_commitments", { phase: "candidacy" }), readTransfers(KEY), univ3rs3Tokens(KEY)]);
+    const names = Object.fromEntries(univ.map((t) => [t.key, t.name]));
+    out.ballots = contestedBallots(commitments, transfers, names);
+  }
+  return res.status(200).json(out);
 }
 
 // Demographics entry (rules §3): check, return the text to sign, then store once signed.
