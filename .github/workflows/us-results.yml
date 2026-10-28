@@ -1,0 +1,38 @@
+name: us-results
+# Election night: reads US Senate calls into the ledger sheet's "us-results" tab.
+# Triggered by cron-job.org (every 2 minutes on election night); runnable by hand.
+# election_date can be set to a past election (e.g. 2024-11-05) to test the parser on real data.
+on:
+  workflow_dispatch:
+    inputs:
+      election_date:
+        description: "Election date (YYYY-MM-DD)"
+        default: "2026-11-03"
+concurrency:
+  group: us-results
+  cancel-in-progress: false
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  results:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: google
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/276784753717/locations/global/workloadIdentityPools/github/providers/github-actions
+          service_account: thr33som3s-ledger@advance-elixir-499223-g7.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/spreadsheets
+          access_token_lifetime: 3600s
+      - run: node ledger/us-results.mjs
+        env:
+          LEDGER_SHEET_ID: 1vDH6lXF_xegq8pWzGdDgHJPwnmpmoDXZoMaWj967UtM
+          GOOGLE_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
+          ELECTION_DATE: ${{ inputs.election_date || '2026-11-03' }}
