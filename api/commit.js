@@ -8,7 +8,8 @@ import { store } from "./_lib/store.js";
 import { readHoldings, readTransfers, readUsResults } from "./_lib/ledger.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
-  univ3rs3Tokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, contestedBallots } from "./_lib/l3ction.js";
+  univ3rs3Tokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, contestedBallots,
+  candidacyIndex, demographicsIndex } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -60,7 +61,8 @@ export default async function handler(req, res) {
     if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
     const message = candidacyMessage(wallet, entries, names, b.issuedAt);
     if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
-    const r = await store("put_commitment", { phase: storedPhase(phase), wallet, username: profile.username, payload: { entries }, signature: b.signature, message });
+    const r = await store("put_commitment", { phase: storedPhase(phase), wallet, username: profile.username, payload: { entries }, signature: b.signature, message,
+      index: TEST_MODE ? null : candidacyIndex(entries, Object.fromEntries([...pool].map(([k, t]) => [k, t.name])), wallet, profile.username) });
     if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your candidacy entry; it is final" : r.error });
     res.status(201).json({ ok: true, submitted_at: r.submitted_at, entries });
   } catch (e) { res.status(502).json({ error: e.message }); }
@@ -103,7 +105,8 @@ async function demographics(req, res, b, wallet, KEY, username) {
   if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
   const message = demographicsMessage(wallet, payload, names, b.issuedAt);
   if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
-  const r = await store("put_commitment", { phase: storedPhase("demographics"), wallet, username, payload, signature: b.signature, message });
+  const r = await store("put_commitment", { phase: storedPhase("demographics"), wallet, username, payload, signature: b.signature, message,
+    index: TEST_MODE ? null : demographicsIndex(payload, names, wallet, username) });
   if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your demographics entry; it is final" : r.error });
   return res.status(201).json({ ok: true, submitted_at: r.submitted_at, payload });
 }

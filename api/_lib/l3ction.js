@@ -229,3 +229,22 @@ export function contestedBallots(entries, transfers, candidateNames) {
   for (const [race, names] of byRace) if (names.size >= 2) out[race] = [...names].sort();
   return out;
 }
+
+// ── Sorted views for the private store ───────────────────────────
+// Sent with each entry so the store can keep tabs that read in order (who runs what, where).
+const RACE_NAME = Object.fromEntries(RACES);
+export function candidacyIndex(entries, names, wallet, username) {
+  return [{ tab: "candidacies", header: ["race", "state", "candidate", "token", "collector", "wallet"], sortBy: [1, 3],
+    rows: entries.map((e) => [e.race, RACE_NAME[e.race] || "", names[e.candidate] || e.candidate, e.candidate, username || "", wallet]) }];
+}
+export function demographicsIndex(payload, names, wallet, username) {
+  const nm = (k) => names[k] || k;
+  const placements = [];
+  for (const d of payload.demographics) for (const r of d.races)
+    placements.push([r, RACE_NAME[r] || "", d.team, d.color, d.kind, d.card ? nm(d.card) : "", username || "", wallet]);
+  return [
+    { tab: "placements", header: ["race", "state", "demographic", "color", "kind", "card", "collector", "wallet"], sortBy: [1, 3, 4], rows: placements },
+    { tab: "inserts", header: ["insert", "token", "quantity", "collector", "wallet"], sortBy: [4, 1],
+      rows: payload.inserts.map((i) => [nm(i.key), i.key, i.qty, username || "", wallet]) },
+  ];
+}
