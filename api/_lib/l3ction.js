@@ -13,9 +13,22 @@ export const PHASES = {
 // under "<phase>-test", so testing never touches the real event.
 export const TEST_MODE = process.env.COMMIT_TEST_MODE === "1";
 export const storedPhase = (phase) => (TEST_MODE ? `${phase}-test` : phase);
-export function windowState(phase, now = Date.now()) {
-  const p = PHASES[phase];
-  if (!p) return null;
+// Per-wallet extensions of a phase's entry window, granted by thr33s. Only entries move: confirmation
+// windows stay the same for everyone.
+export const EXTENSIONS = {
+  candidacy: {
+    // travelling on Oct 28; entries until Thu Oct 29, 6:00pm EDT (thr33s)
+    "0x173dee1da0a84a122c7b24e81b10653e146e11cd": "2026-10-29T22:00:00Z", // razr
+    "0xb1f9da6b807953d90042feb76d369f255a625a37": "2026-10-29T22:00:00Z", // Rattro
+    "0x37d0c5c8c7ade23cb5e32f5a6ceb136f639b1913": "2026-10-29T22:00:00Z", // SuboshiNakasoto
+  },
+};
+
+export function windowState(phase, now = Date.now(), wallet = null) {
+  const base = PHASES[phase];
+  if (!base) return null;
+  const ext = wallet && EXTENSIONS[phase] && EXTENSIONS[phase][String(wallet).toLowerCase()];
+  const p = ext ? { ...base, commitCloses: ext, extended: true } : base;
   const t = (s) => Date.parse(s);
   const commitOpen = TEST_MODE || (now >= t(p.commitOpens) && now <= t(p.commitCloses));
   const confirmOpen = TEST_MODE || (now >= t(p.confirmOpens) && now <= t(p.confirmCloses));

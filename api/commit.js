@@ -20,7 +20,7 @@ export default async function handler(req, res) {
   const wallet = walletFromReq(req);
   const phase = String((req.method === "GET" ? req.query.phase : body(req).phase) || "");
   if (req.method === "GET" && phase === "map") return map(res, KEY);
-  const win = windowState(phase);
+  const win = windowState(phase, Date.now(), wallet);
   if (!win) return res.status(400).json({ error: "unknown phase" });
   try {
     if (req.method === "GET") {
