@@ -13,7 +13,8 @@ export default async function handler(req, res) {
   try {
     const wantActivity = !!req.query.activity;
     const [all, supply, ledger, transfers] = await Promise.all([readHoldings(KEY), readSupply(KEY), readState(KEY), wantActivity ? readTransfers(KEY) : null]);
-    const holders = all.filter((h) => h.key === token).map(({ wallet, balance }) => ({ wallet, balance }));
+    const holders = all.filter((h) => h.key === token).map(({ wallet, balance }) => ({ wallet, balance }))
+      .sort((a, b) => b.balance - a.balance || (a.wallet < b.wallet ? -1 : 1));   // largest first
     const activity = transfers
       ? transfers.filter((t) => t.key === token)
           .map(({ chain, from, to, amount, type, block, time, tx }) => ({ chain, from, to, amount, type, block, time, tx }))
