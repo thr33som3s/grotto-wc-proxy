@@ -19,7 +19,7 @@ export default async function handler(req, res) {
   const KEY = process.env.GOOGLE_API_KEY;
   const wallet = walletFromReq(req);
   const phase = String((req.method === "GET" ? req.query.phase : body(req).phase) || "");
-  if (req.method === "GET" && phase === "map") return map(res, KEY);
+  if (req.method === "GET" && phase === "map") return map(res, KEY, wallet);
   const win = windowState(phase, Date.now(), wallet);
   if (!win) return res.status(400).json({ error: "unknown phase" });
   try {
@@ -71,17 +71,20 @@ export default async function handler(req, res) {
 // GET /api/commit?phase=map: public data for the 3l3ction map page. Races, the schedule, the US calls,
 // the number of confirmed candidates (once candidacy confirmations close), and every race with a candidate
 // and who the candidates are (once demographics entries close). Who ran them stays private until results.
-async function map(res, KEY) {
-  res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=120");
+// thr33s's own wallet, signed in on conn3ct, previews the reveal early. Never cached.
+const ARTIST_WALLET = "0xfe917312344b4ed3283c5e142868cd3eaa782933";
+async function map(res, KEY, wallet) {
+  const preview = wallet === ARTIST_WALLET;
+  res.setHeader("Cache-Control", preview ? "private, no-store" : "s-maxage=60, stale-while-revalidate=120");
   const now = Date.now();
-  const out = { races: RACES, schedule: PHASES, us: await readUsResults(KEY), candidateCount: null, ballots: null, generatedAt: new Date().toISOString() };
-  if (now > Date.parse(PHASES.candidacy.confirmCloses)) {
+  const out = { races: RACES, schedule: PHASES, us: await readUsResults(KEY), candidateCount: null, ballots: null, preview, generatedAt: new Date().toISOString() };
+  if (preview || now > Date.parse(PHASES.candidacy.confirmCloses)) {
     const [{ commitments = [] }, transfers, univ] = await Promise.all([store("list_commitments", { phase: "candidacy" }), readTransfers(KEY), univ3rs3Tokens(KEY)]);
     const names = Object.fromEntries(univ.map((t) => [t.key, shortName(t.name)]));
     const images = Object.fromEntries(univ.map((t) => [t.key, t.image || ""]));
     const cr = candidateRaces(commitments, transfers, names, images);
     out.candidateCount = cr.total;
-    if (now > Date.parse(PHASES.demographics.commitCloses)) out.ballots = cr.races;
+    if (preview || now > Date.parse(PHASES.demographics.commitCloses)) out.ballots = cr.races;
   }
   return res.status(200).json(out);
 }
