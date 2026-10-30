@@ -38,9 +38,23 @@ export function windowState(phase, now = Date.now(), wallet = null) {
 export const RACES = [["AL","Alabama"],["AK","Alaska"],["AR","Arkansas"],["CO","Colorado"],["DE","Delaware"],["FL","Florida (special)"],["GA","Georgia"],["ID","Idaho"],["IL","Illinois"],["IA","Iowa"],["KS","Kansas"],["KY","Kentucky"],["LA","Louisiana"],["ME","Maine"],["MA","Massachusetts"],["MI","Michigan"],["MN","Minnesota"],["MS","Mississippi"],["MT","Montana"],["NE","Nebraska"],["NH","New Hampshire"],["NJ","New Jersey"],["NM","New Mexico"],["NC","North Carolina"],["OH","Ohio (special)"],["OK","Oklahoma"],["OR","Oregon"],["RI","Rhode Island"],["SC","South Carolina"],["SD","South Dakota"],["TN","Tennessee"],["TX","Texas"],["VA","Virginia"],["WV","West Virginia"],["WY","Wyoming"]];
 export const RACE_CODES = new Set(RACES.map(([c]) => c));
 
-// univ3rs3 metadata, read once per warm instance for 2 minutes.
+// A collection's metadata, read once per warm instance for 2 minutes.
+const collMemo = {};
 let univMemo = null;
-export const resetUniv3rs3Memo = () => { univMemo = null; }; // for tests
+export const resetUniv3rs3Memo = () => { univMemo = null; for (const k in collMemo) delete collMemo[k]; }; // for tests
+export async function collectionTokens(key, coll) {
+  if (coll === "univ3rs3") return univ3rs3Tokens(key);
+  const m = collMemo[coll];
+  if (m && Date.now() - m.at < 120000) return m.tokens;
+  const c = COLLECTIONS.find((x) => x.key === coll);
+  const api = "https://sheets.googleapis.com/v4/spreadsheets";
+  const meta = await (await fetch(`${api}/${c.sheet}?fields=sheets.properties.title&key=${key}`)).json();
+  const title = meta.sheets[0].properties.title;
+  const data = await (await fetch(`${api}/${c.sheet}/values/${encodeURIComponent(`'${title}'!A:BF`)}?key=${key}`)).json();
+  const tokens = buildCollection(c, data.values || []);
+  collMemo[coll] = { at: Date.now(), tokens };
+  return tokens;
+}
 export async function univ3rs3Tokens(key) {
   if (univMemo && Date.now() - univMemo.at < 120000) return univMemo.tokens;
   const c = COLLECTIONS.find((x) => x.key === "univ3rs3");

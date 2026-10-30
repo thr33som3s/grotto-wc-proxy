@@ -8,7 +8,7 @@ import { store } from "./_lib/store.js";
 import { readHoldings, readTransfers, readUsResults } from "./_lib/ledger.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
-  univ3rs3Tokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, candidateRaces, shortName,
+  univ3rs3Tokens, collectionTokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, candidateRaces, shortName,
   candidacyIndex, demographicsIndex } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
@@ -97,13 +97,14 @@ async function demographics(req, res, b, wallet, KEY, username) {
     demographics: (Array.isArray(b.demographics) ? b.demographics : []).map(clean),
     inserts: (Array.isArray(b.inserts) ? b.inserts : []).filter((i) => Number(i.qty) > 0).map((i) => ({ key: String(i.key), qty: Number(i.qty) })),
   };
-  const [univ, holdings] = await Promise.all([univ3rs3Tokens(KEY), readHoldings(KEY)]);
+  const [univ, bulk, holdings] = await Promise.all([univ3rs3Tokens(KEY), collectionTokens(KEY, "bulk").catch(() => []), readHoldings(KEY)]);
   const tokens = new Map(univ.map((t) => [t.key, t]));
+  const bulkNames = new Map(bulk.map((t) => [t.key, t.name]));
   const held = TEST_MODE ? { get: () => Infinity } : new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
   const { problems } = checkDemographics(payload, tokens, held);
   if (problems.length) return res.status(422).json({ error: problems[0], problems });
   const keys = [...payload.demographics.map((d) => d.card).filter(Boolean), ...payload.inserts.map((i) => i.key)];
-  const names = Object.fromEntries(keys.map((k) => [k, tokens.get(k)?.name || k]));
+  const names = Object.fromEntries(keys.map((k) => [k, tokens.get(k)?.name || bulkNames.get(k) || k]));
   if (!b.signature) {
     const issuedAt = new Date().toISOString();
     return res.status(200).json({ issuedAt, message: demographicsMessage(wallet, payload, names, issuedAt) });
