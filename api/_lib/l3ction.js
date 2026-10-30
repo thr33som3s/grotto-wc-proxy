@@ -77,6 +77,8 @@ export const TOKEN_DEMOGRAPHICS = {
   "Dead Dads": u(range(11001, 11004)),
   "Butchers": u(range(11005, 11008)),
   "Lab Rats": u(range(11009, 11012)),
+  // the 16 Correlated Series 1 Scoutmasters cards, #C001–#C017 (there is no #C015) (thr33s, Oct 30)
+  "Scoutmasters": u([...range(107001, 107014), 107016, 107017]),
 };
 const TOKEN_DEMO_BY_KEY = Object.fromEntries(Object.entries(TOKEN_DEMOGRAPHICS).flatMap(([d, ks]) => ks.map((k) => [k, d])));
 // The demographic a piece belongs to, or null. t: a catalog token ({ key, coll, traits }).
