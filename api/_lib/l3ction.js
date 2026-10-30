@@ -227,7 +227,7 @@ export function demographicsMessage(wallet, payload, names, issuedAt) {
 // Every race with a confirmed (burned) candidate, and its candidates. Revealed once demographics entries
 // close (thr33s, Oct 28 pod): collectors place demographics without knowing where candidates run.
 // Returns { races: { KY: { candidates: ["Franklin DeSoto", ...], runs: 3, contested: true } }, total: n }.
-export function candidateRaces(entries, transfers, candidateNames) {
+export function candidateRaces(entries, transfers, candidateNames, candidateImages = {}) {
   const win = windowState("candidacy");
   const byRace = new Map();
   let total = 0;
@@ -236,12 +236,15 @@ export function candidateRaces(entries, transfers, candidateNames) {
     for (const x of e.payload?.entries || []) {
       if (!burned[x.candidate]) continue;            // only candidates actually burned run
       const name = candidateNames[x.candidate] || x.candidate;
-      if (!byRace.has(x.race)) byRace.set(x.race, { names: new Set(), runs: 0 });
-      const r = byRace.get(x.race); r.names.add(name); r.runs++; total++;
+      if (!byRace.has(x.race)) byRace.set(x.race, { names: new Map(), runs: 0 });
+      const r = byRace.get(x.race); if (!r.names.has(name)) r.names.set(name, candidateImages[x.candidate] || ""); r.runs++; total++;
     }
   }
   const races = {};
-  for (const [race, r] of byRace) races[race] = { candidates: [...r.names].sort(), runs: r.runs, contested: r.names.size >= 2 };
+  for (const [race, r] of byRace) {
+    const names = [...r.names.keys()].sort();
+    races[race] = { candidates: names, images: names.map((n) => r.names.get(n)), runs: r.runs, contested: names.length >= 2 };
+  }
   return { races, total };
 }
 // Short display name: "Franklin DeSoto, 1973 Candidates, Series 10, #010" -> "Franklin DeSoto".

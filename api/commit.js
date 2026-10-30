@@ -78,7 +78,8 @@ async function map(res, KEY) {
   if (now > Date.parse(PHASES.candidacy.confirmCloses)) {
     const [{ commitments = [] }, transfers, univ] = await Promise.all([store("list_commitments", { phase: "candidacy" }), readTransfers(KEY), univ3rs3Tokens(KEY)]);
     const names = Object.fromEntries(univ.map((t) => [t.key, shortName(t.name)]));
-    const cr = candidateRaces(commitments, transfers, names);
+    const images = Object.fromEntries(univ.map((t) => [t.key, t.image || ""]));
+    const cr = candidateRaces(commitments, transfers, names, images);
     out.candidateCount = cr.total;
     if (now > Date.parse(PHASES.demographics.commitCloses)) out.ballots = cr.races;
   }
