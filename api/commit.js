@@ -9,7 +9,7 @@ import { readHoldings, readTransfers, readUsResults } from "./_lib/ledger.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
   univ3rs3Tokens, collectionTokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, candidateRaces, shortName,
-  candidacyIndex, demographicsIndex } from "./_lib/l3ction.js";
+  candidacyIndex, demographicsIndex, votingToken, checkVotes, votingMessage, votingItems, votingIndex } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -33,11 +33,19 @@ export default async function handler(req, res) {
         const [from, to] = confirmSpan(mine, win);
         sent = Object.fromEntries(Object.entries(sentTo(demographicsItems(mine.payload), wallet, await readTransfers(KEY), from, to)).map(([k, v]) => [k, v.sent]));
       }
-      return res.status(200).json({ phase, window: win, races: RACES, entry: mine, burns, sent });
+      let ballots = null;
+      if (phase === "voting") {
+        ballots = await votingBallots(KEY);
+        if (mine) {
+          const [from, to] = confirmSpan(mine, win);
+          sent = Object.fromEntries(Object.entries(sentTo(votingItems(mine.payload), wallet, await readTransfers(KEY), from, to)).map(([k, v]) => [k, v.sent]));
+        }
+      }
+      return res.status(200).json({ phase, window: win, races: RACES, entry: mine, burns, sent, ballots });
     }
     if (req.method !== "POST") return res.status(405).json({ error: "GET or POST" });
     if (!wallet) return res.status(401).json({ error: "sign in first" });
-    if (phase !== "candidacy" && phase !== "demographics") return res.status(400).json({ error: `${phase} submissions open later` });
+    if (!["candidacy", "demographics", "voting"].includes(phase)) return res.status(400).json({ error: `${phase} submissions open later` });
     if (!win.commitOpen) return res.status(403).json({ error: `the ${phase} window is not open` });
 
     const { profile } = await store("get_profile", { wallet });
@@ -47,6 +55,7 @@ export default async function handler(req, res) {
 
     const b = body(req);
     if (phase === "demographics") return demographics(req, res, b, wallet, KEY, profile.username);
+    if (phase === "voting") return voting(req, res, b, wallet, KEY, profile.username);
     const entries = Array.isArray(b.entries) ? b.entries.map((e) => ({ race: String(e.race || "").toUpperCase(), candidate: String(e.candidate || "") })) : [];
     const [pool, holdings] = await Promise.all([candidatePool(KEY), readHoldings(KEY)]);
     const problems = checkCandidacy(entries, wallet, pool, holdings, { skipHolding: TEST_MODE });
@@ -87,6 +96,44 @@ async function map(res, KEY, wallet) {
     if (preview || now > Date.parse(PHASES.demographics.commitCloses)) out.ballots = cr.races;
   }
   return res.status(200).json(out);
+}
+
+// Every race with a confirmed candidate, and its candidates (the voting ballot; public since demographics closed).
+async function votingBallots(KEY) {
+  const [{ commitments = [] }, transfers, univ] = await Promise.all([store("list_commitments", { phase: "candidacy" }), readTransfers(KEY), univ3rs3Tokens(KEY)]);
+  const names = Object.fromEntries(univ.map((t) => [t.key, shortName(t.name)]));
+  const images = Object.fromEntries(univ.map((t) => [t.key, t.image || ""]));
+  return candidateRaces(commitments, transfers, names, images).races;
+}
+
+// Voting entry (rules §6): check, return the text to sign, then store once signed.
+async function voting(req, res, b, wallet, KEY, username) {
+  const payload = { votes: (Array.isArray(b.votes) ? b.votes : []).map((v) => ({
+    race: String(v.race || "").toUpperCase(), token: String(v.token || ""),
+    declared: v.declared ? String(v.declared) : undefined, candidate: v.candidate ? String(v.candidate) : undefined })) };
+  const colls = [...new Set(payload.votes.map((v) => v.token.split(":")[0]))];
+  const [lists, holdings, ballots, demo] = await Promise.all([
+    Promise.all(colls.map((c) => collectionTokens(KEY, c).catch(() => []))), readHoldings(KEY), votingBallots(KEY),
+    store("get_commitment", { phase: storedPhase("demographics"), wallet })]);
+  const tokens = new Map(lists.flat().map((t) => [t.key, t]));
+  for (const v of payload.votes) { const vt = votingToken(tokens.get(v.token)); if (vt && vt.color !== "purple") delete v.declared;
+    const bl = ballots[v.race]; if (bl && bl.candidates.length === 1) v.candidate = bl.candidates[0]; }
+  const held = TEST_MODE ? { get: () => Infinity } : new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
+  const freeCard = demo?.commitment?.payload?.demographics?.find((d) => d.kind === "free")?.card || null;
+  const problems = checkVotes(payload, tokens, held, ballots, freeCard);
+  if (problems.length) return res.status(422).json({ error: problems[0], problems });
+  if (!b.signature) {
+    const issuedAt = new Date().toISOString();
+    return res.status(200).json({ issuedAt, message: votingMessage(wallet, payload, tokens, issuedAt) });
+  }
+  const age = Date.now() - Date.parse(b.issuedAt);
+  if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
+  const message = votingMessage(wallet, payload, tokens, b.issuedAt);
+  if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
+  const r = await store("put_commitment", { phase: storedPhase("voting"), wallet, username, payload, signature: b.signature, message,
+    index: TEST_MODE ? null : votingIndex(payload, tokens, wallet, username) });
+  if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your voting entry; it is final" : r.error });
+  return res.status(201).json({ ok: true, submitted_at: r.submitted_at, payload });
 }
 
 // Demographics entry (rules §3): check, return the text to sign, then store once signed.

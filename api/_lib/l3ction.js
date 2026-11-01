@@ -284,3 +284,80 @@ export function demographicsIndex(payload, names, wallet, username) {
       rows: payload.inserts.map((i) => [nm(i.key), i.key, i.qty, username || "", wallet]) },
   ];
 }
+
+// ── Voting (rules §6) ────────────────────────────────────────────
+// Named voting inserts (§6.1), by token. 2024 Voters (bulk) count by their color trait (×1).
+// thr33zi3s background votes: only backgrounds exactly RED, BLUE or PURPLE; gen1 ×3, gen2 ×2, gen3 ×1.
+export const VOTING_INSERTS = {
+  "univ3rs3:314001": { color: "red", mult: 3 },    // #MJ1 Molotov Jones
+  "univ3rs3:316008": { color: "red", mult: 3 },    // #MDR1 Marlene Dietrich Tom Niedenfuer
+  "univ3rs3:319002": { color: "red", mult: 2 },    // #LTHR2 Red Leathers
+  "univ3rs3:314002": { color: "blue", mult: 3 },   // #FC1 Frozen Carbone
+  "univ3rs3:316005": { color: "blue", mult: 3 },   // #MDB1
+  "univ3rs3:319003": { color: "blue", mult: 2 },   // #LTHR3 Blue Leathers
+  "univ3rs3:314003": { color: "purple", mult: 3 }, // #JOA1 Joan of Arc
+  "univ3rs3:316014": { color: "purple", mult: 3 }, // #MDP1
+  "univ3rs3:318008": { color: "purple", mult: 3 }, // #3MAS2 Turn Back the Clock Marlene
+  "univ3rs3:318014": { color: "purple", mult: 3 }, // #3MAS8 New Mechanic Frozen Carbone & Molotov Jones
+  "univ3rs3:319004": { color: "purple", mult: 2 }, // #LTHR4 Purple Leathers
+};
+const BACKGROUND_MULT = { thr33zi3s: 3, gen2: 2, gen3: 1 };
+// t: catalog token. Returns { color, mult, kind } or null.
+export function votingToken(t) {
+  if (!t) return null;
+  if (VOTING_INSERTS[t.key]) return { ...VOTING_INSERTS[t.key], kind: "insert" };
+  if (t.coll === "bulk" && lc(t.traits.team) === "voters") {
+    const c = lc(t.traits.color);
+    return ["red", "blue", "purple"].includes(c) ? { color: c, mult: 1, kind: "voter" } : null;
+  }
+  if (BACKGROUND_MULT[t.coll]) {
+    const bg = String(t.traits.background || "").trim().toUpperCase();
+    return ["RED", "BLUE", "PURPLE"].includes(bg) ? { color: bg.toLowerCase(), mult: BACKGROUND_MULT[t.coll], kind: "trait" } : null;
+  }
+  return null;
+}
+
+// Rules §6.2 / v13: one vote per race, only in races with a candidate; purple declares red or blue; a contested
+// race names one of its candidates. tokens: Map key -> catalog token; held: Map key -> balance;
+// ballots: { race: { candidates: [...] } }; freeCard: the collector's free demographic card (kept, §3.1).
+export function checkVotes(payload, tokens, held, ballots, freeCard) {
+  const out = [];
+  const votes = Array.isArray(payload.votes) ? payload.votes : [];
+  if (!votes.length) out.push("cast at least one vote");
+  const seen = new Set(), use = new Map();
+  for (const v of votes) {
+    const b = ballots[v.race];
+    if (!b) { out.push(`${v.race}: no candidate runs there, so it can't be voted in`); continue; }
+    if (seen.has(v.race)) { out.push(`${v.race}: one vote per race`); continue; }
+    seen.add(v.race);
+    const t = tokens.get(v.token), vt = votingToken(t);
+    if (!vt) { out.push(`${v.token} isn't a voting token`); continue; }
+    if (vt.color === "purple" && v.declared !== "red" && v.declared !== "blue") out.push(`${v.race}: a purple token must declare red or blue`);
+    if (b.candidates.length >= 2 && !b.candidates.includes(v.candidate)) out.push(`${v.race}: choose one of its candidates`);
+    use.set(v.token, (use.get(v.token) || 0) + 1);
+  }
+  for (const [k, n] of use) {
+    const t = tokens.get(k), keep = k === freeCard ? 1 : 0;
+    if (t && BACKGROUND_MULT[t.coll] && n > 1) out.push(`${t.name}: a thr33zi3s can vote only once`);
+    if ((held.get(k) || 0) < n + keep) out.push(`you don't hold enough of ${t?.name || k} (need ${n + keep}${keep ? ", one stays held for your free demographic" : ""}, hold ${held.get(k) || 0})`);
+  }
+  return [...new Set(out)];
+}
+
+export function votingMessage(wallet, payload, tokens, issuedAt) {
+  const lines = payload.votes.map((v) => {
+    const t = tokens.get(v.token), vt = votingToken(t) || {};
+    return `${v.race}: ${t?.name || v.token} (${vt.color} x${vt.mult})${v.declared ? ` declared ${v.declared}` : ""}${v.candidate ? ` for ${v.candidate}` : ""}`;
+  });
+  return `thr33som3s 2026 3l3ction\nvoting entry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${lines.join("\n")}\n\nvoting tokens to 3vault: ${payload.votes.length}\n\n${COMMIT_PLEDGE}\n\nSigning is free and moves nothing now.`;
+}
+export function votingItems(payload) {
+  const n = new Map();
+  for (const v of payload.votes || []) n.set(v.token, (n.get(v.token) || 0) + 1);
+  return [...n].map(([key, qty]) => ({ key, dest: "3vault", qty }));
+}
+export function votingIndex(payload, tokens, wallet, username) {
+  return [{ tab: "votes", header: ["race", "state", "token", "token id", "color", "declared", "multiplier", "candidate", "collector", "wallet"], sortBy: [1, 9],
+    rows: payload.votes.map((v) => { const t = tokens.get(v.token), vt = votingToken(t) || {};
+      return [v.race, RACE_NAME[v.race] || "", t?.name || v.token, v.token, vt.color || "", v.declared || "", vt.mult || "", v.candidate || "", username || "", wallet]; }) }];
+}
