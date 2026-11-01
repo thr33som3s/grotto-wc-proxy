@@ -7,7 +7,8 @@ import { COLLECTIONS, buildCollection } from "./catalog.js";
 export const PHASES = {
   candidacy:    { commitOpens: "2026-10-28T04:00:00Z", commitCloses: "2026-10-29T03:59:59Z", confirmOpens: "2026-10-29T04:01:00Z", confirmCloses: "2026-10-30T03:59:59Z" },
   demographics: { commitOpens: "2026-10-30T04:00:00Z", commitCloses: "2026-10-31T03:59:59Z", confirmOpens: "2026-10-31T04:01:00Z", confirmCloses: "2026-11-01T03:59:59Z" },
-  voting:       { commitOpens: "2026-11-01T04:00:00Z", commitCloses: "2026-11-02T04:59:59Z", confirmOpens: "2026-11-02T05:01:00Z", confirmCloses: "2026-11-03T04:59:59Z" },
+  voting:       { commitOpens: "2026-11-01T16:00:00Z", commitCloses: "2026-11-02T16:59:59Z",   // revised by thr33s: Sun Nov 1 12:00pm EDT – Mon Nov 2 11:59am EST
+                  confirmOpens: "2026-11-02T05:01:00Z", confirmCloses: "2026-11-03T04:59:59Z" },
 };
 // Preview deployments can set COMMIT_TEST_MODE=1: windows are always open and entries are stored
 // under "<phase>-test", so testing never touches the real event.
