@@ -6,6 +6,7 @@ const API = "https://sheets.googleapis.com/v4/spreadsheets";
 
 // Warm serverless instances reuse this for 2 minutes, so bursts of requests read the sheet once.
 const memo = new Map();
+export const resetLedgerMemo = () => memo.clear(); // for tests
 async function tab(name, cols, key) {
   const hit = memo.get(name);
   if (hit && Date.now() - hit.at < 120000) return hit.rows;
