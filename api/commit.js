@@ -100,7 +100,7 @@ async function map(res, KEY, wallet) {
 
 // Every race with a confirmed candidate, and its candidates (the voting ballot; public since demographics closed).
 async function votingBallots(KEY) {
-  const [{ commitments = [] }, transfers, univ] = await Promise.all([store("list_commitments", { phase: "candidacy" }), readTransfers(KEY), univ3rs3Tokens(KEY)]);
+  const [{ commitments = [] }, transfers, univ] = await Promise.all([store("list_commitments", { phase: storedPhase("candidacy") }), readTransfers(KEY), univ3rs3Tokens(KEY)]);
   const names = Object.fromEntries(univ.map((t) => [t.key, shortName(t.name)]));
   const images = Object.fromEntries(univ.map((t) => [t.key, t.image || ""]));
   return candidateRaces(commitments, transfers, names, images).races;
