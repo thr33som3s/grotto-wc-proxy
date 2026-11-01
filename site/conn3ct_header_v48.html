@@ -1,0 +1,1645 @@
+<script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+<script>
+// CONN3CT v48. Page Header Code Injection for thr33som3s.com/conn3ct. Pairs with code block v3.
+// Adds profiles, sign-in, the 3l3ction candidacy screen, and opening the page inside wallet apps on phones.
+// All data comes from the proxy: /api/catalog (metadata, families, editions), /api/holdings
+// (any wallet's balances) and /api/holders (who holds a piece). Those read the ledger, which
+// tracks the chain every 5 minutes. No chain calls and no API keys on this page.
+
+// ── CONFIG ────────────────────────────────────────────────────────
+// Production proxy. For rehearsals, ?api=https://<preview>.vercel.app/api points the page at a
+// grotto-wc-proxy preview deployment (only those addresses are accepted).
+const API = (() => {
+  try {
+    const a = new URLSearchParams(location.search).get('api');
+    const u = a && new URL(a);
+    if (u && u.protocol === 'https:' && u.hostname.endsWith('.vercel.app') && u.hostname.startsWith('grotto-wc-proxy')) return u.origin + '/api';
+  } catch (e) {}
+  return 'https://grotto-wc-proxy.vercel.app/api';
+})();
+
+// Canonical collection order (thr33s's hierarchy) and the labels the page has always used.
+const TABS = [
+  { key: 'univ3rs3',  label: 'thr33som3s univ3rs3',       chain: 'eth' },
+  { key: 'bulk',      label: 'thr33som3s bulk',           chain: 'base' },
+  { key: 'thr33zi3s', label: 'thr33zi3s',                 chain: 'eth' },
+  { key: 'gen2',      label: 'thr33zi3s generation 2',    chain: 'eth' },
+  { key: 'gen3',      label: 'thr33zi3s generation 3',    chain: 'eth' },
+  { key: 'guest',     label: 'x thr33som3s guest artist', chain: 'eth' },
+];
+const TAB = Object.fromEntries(TABS.map((t, i) => [t.key, { ...t, order: i }]));
+const DEFAULT_COLLECTION = 'all';   // the page opens on all collections
+
+// Friendly names for trait fields; anything not listed shows as its sheet column name.
+const FIELD_LABELS = {
+  card_type: 'type', card_year: 'card year', player_position: 'position', drop_date: 'drop date',
+  number_text: 'number', 'political party': 'political party', aura_score: 'aura score',
+};
+// Never shown as traits or filters.
+const HIDDEN_FIELDS = new Set(['image_ipfs', 'updated', 's', 'last updated']);
+// univ3rs3 / bulk color-count columns: kept out of the trait grid and filters, as before.
+const COLOR_COUNT_FIELDS = new Set(['red','blue','white','yellow','green','black','lt blue','orange','gold','dk blue','lt green','saffron','maroon','light blue','dark blue','light green']);
+// Filter order: these first (when present), then everything else alphabetically.
+const FILTER_FIRST = ['collection', 'family', 'hair/hat', 'eyes', 'face/mouth', 'shirt/torso', 'arms', 'accessories', 'background', 'team', 'card_type', 'series', 'season', 'color', 'country', 'aura', 'tier', 'special'];
+const FILTER_MAX_VALUES = 400;
+// Shown in the lightbox but too fine-grained to filter by.
+const FILTER_EXCLUDE = new Set(['drop_date', 'number_text']);
+
+// ── STATE ─────────────────────────────────────────────────────────
+let catalog        = [];
+let byKey          = new Map();
+let mine           = {};          // connected wallet: key -> balance
+let mineTotals     = null;
+let viewed         = null;        // another wallet being viewed: { wallet, owned, totals }
+let view           = 'all';
+let filters        = {};
+let searchQ        = '';
+let searchAdvanced = false;
+let showBurned     = false;
+let walletAddr     = null;
+let provider       = null;
+let catalogLoaded  = false;
+let appInitialized = false;
+let collectionFilter = DEFAULT_COLLECTION;
+let sortMode       = 'drop_date_asc';
+const descCache    = {};          // collection key -> Map(id -> description), loaded on first lightbox open
+
+// Virtual scroll
+let rowH = 340;   // card height plus grid gap; measured from the first rendered card
+const BUFFER = 20;
+let vsTokens = [];
+let vsFrame  = null;
+
+// ── HELPERS ───────────────────────────────────────────────────────
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const short = a => a ? a.slice(0, 6) + '...' + a.slice(-4) : '';
+let names = {};   // wallet -> username; only loaded for signed-in profile holders
+const nameOf = a => (a && names[a.toLowerCase()]) || short(a);
+const fieldLabel = k => FIELD_LABELS[k] || k;
+const vals = (t, k) => { const v = k === 'collection' ? t.collection : t.traits[k]; return v == null ? [] : Array.isArray(v) ? v : [v]; };
+const isAddr = w => /^0x[0-9a-fA-F]{40}$/.test(w || '');
+async function getJSON(path) {
+  const r = await fetch(API + path);
+  if (!r.ok) throw new Error(path + ': ' + r.status);
+  return r.json();
+}
+
+// ── CATALOG ───────────────────────────────────────────────────────
+async function loadCatalog() {
+  if (catalogLoaded) return;
+  show('c-loading', true);
+  show('connect-hero', false);
+  try {
+    const data = await getJSON('/catalog');
+    catalog = data.tokens.filter(t => TAB[t.coll]).map(toToken);
+    byKey = new Map(catalog.map(t => [t.key, t]));
+    if (data.errors && data.errors.length) console.warn('conn3ct catalog warnings:', data.errors);
+  } catch (e) {
+    console.warn('conn3ct: catalog failed to load', e);
+    const el = document.getElementById('c-loading');
+    if (el) el.textContent = 'the catalog could not load. refresh to try again.';
+    return;
+  }
+  catalogLoaded = true;
+  sortCatalog();
+  show('c-loading', false);
+  const stats = document.getElementById('stats'); if (stats) stats.style.display = 'flex';
+  const vb = document.getElementById('view-burned'); if (vb) vb.disabled = false;
+  if (!walletAddr) show('connect-hero', true);
+  buildFilters();
+  renderGrid();
+  updateStats();
+  const w = new URLSearchParams(location.search).get('wallet');
+  if (isAddr(w)) viewWallet(w);
+}
+
+function toToken(t) {
+  const tab = TAB[t.coll];
+  const e = t.editions || { minted: 0, burned: 0, circulating: 0, holders: 0 };
+  const traitText = Object.entries(t.traits)
+    .filter(([k]) => !COLOR_COUNT_FIELDS.has(k) && !HIDDEN_FIELDS.has(k))
+    .flatMap(([, v]) => Array.isArray(v) ? v : [v]);
+  return {
+    key: t.key, coll: t.coll, tokenId: t.id, name: t.name || (tab.label + ' #' + t.id), img: t.image,
+    collection: tab.label, chain: tab.chain, order: tab.order,
+    traits: t.traits, editions: e,
+    drop_date: t.traits.drop_date || '',
+    burned: e.minted > 0 && e.circulating === 0,
+    unminted: e.minted === 0,
+    _words: [t.name, ...traitText].join(' | ').toLowerCase(),
+  };
+}
+
+// ── WALLETS ───────────────────────────────────────────────────────
+async function holdingsFor(wallet) {
+  const data = await getJSON('/holdings?wallet=' + wallet);
+  return { owned: Object.fromEntries(data.tokens.map(t => [t.key, t.balance])), totals: data.totals };
+}
+
+async function connectWallet() {
+  if (!window.ethereum) { openWalletApps(); return; }
+  const btn = document.getElementById('connect-btn');
+  btn.disabled = true; btn.textContent = 'connecting...';
+  try {
+    provider = new ethers.providers.Web3Provider(window.ethereum);
+    await provider.send('eth_requestAccounts', []);
+    walletAddr = (await provider.getSigner().getAddress()).toLowerCase();
+    onConnected();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'connect wallet';
+  }
+}
+
+async function onConnected() {
+  document.getElementById('wallet-pill').classList.add('visible');
+  const pill = document.getElementById('wallet-addr');
+  pill.textContent = 'loading holdings...';
+  show('connect-btn', false);
+  show('connect-hero', false);
+  document.getElementById('view-mine').disabled = false;
+  try {
+    const h = await holdingsFor(walletAddr);
+    mine = h.owned; mineTotals = h.totals;
+  } catch (e) { console.warn('conn3ct: holdings failed', e); mine = {}; mineTotals = null; }
+  pill.textContent = short(walletAddr);
+  logConnection('guest');
+  resortIfHeld();
+  restoreOrAskToJoin();
+  renderViewing();
+  renderGrid();
+  updateStats();
+}
+
+function disconnect() {
+  endSession();
+  walletAddr = null; mine = {}; mineTotals = null; provider = null;
+  resortIfHeld();
+  document.getElementById('wallet-pill').classList.remove('visible');
+  const btn = document.getElementById('connect-btn');
+  btn.style.display = 'inline-block'; btn.disabled = false; btn.textContent = 'connect wallet';
+  if (!viewed) { document.getElementById('view-mine').disabled = true; setView('all'); }
+  renderViewing();
+  renderGrid();
+  updateStats();
+}
+
+// View any collector's wallet. The "mine" view and owned badges follow the viewed wallet.
+async function viewWallet(w) {
+  w = (w || '').trim().toLowerCase();
+  if (!isAddr(w)) { flashViewing(Object.keys(names).length ? 'no collector by that username or wallet' : 'that is not a wallet address'); return; }
+  if (w === walletAddr) { stopViewing(); return; }
+  flashViewing('loading ' + nameOf(w) + '...');
+  try {
+    const h = await holdingsFor(w);
+    viewed = { wallet: w, ...h };
+  } catch (e) { flashViewing('could not load that wallet'); return; }
+  resortIfHeld();
+  try { const u = new URL(location.href); u.searchParams.set('wallet', w); history.replaceState(null, '', u); } catch (e) {}
+  document.getElementById('view-mine').disabled = false;
+  closeLightbox();
+  setView('mine');
+  renderViewing();
+  updateStats();
+}
+function stopViewing() {
+  viewed = null;
+  resortIfHeld();
+  try { const u = new URL(location.href); u.searchParams.delete('wallet'); history.replaceState(null, '', u); } catch (e) {}
+  if (!walletAddr) { document.getElementById('view-mine').disabled = true; view = 'all'; }
+  setView(view);
+  renderViewing();
+  updateStats();
+}
+// Whose holdings the grid reflects: a viewed wallet, else the connected one.
+const subject = () => viewed ? viewed.owned : mine;
+const subjectQty = t => subject()[t.key] || 0;
+const isOwned = t => subjectQty(t) > 0;
+
+// Small bar under the stats: who you're looking at, and a box to look up any wallet.
+function renderViewing() {
+  let bar = document.getElementById('c-viewing');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'c-viewing';
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px;letter-spacing:0.06em;margin:10px 0 18px;';
+    const anchor = document.getElementById('stats') || document.getElementById('c-grid');
+    if (!anchor || !anchor.parentElement) return;
+    anchor.parentElement.insertBefore(bar, anchor.nextSibling);
+  }
+  const who = viewed
+    ? `viewing <strong>${esc(nameOf(viewed.wallet))}</strong>${totalsText(viewed.totals)} <button type="button" id="c-view-back" style="font:inherit;cursor:pointer;background:none;border:1px solid currentColor;padding:2px 8px">${walletAddr ? 'back to my wallet' : 'stop viewing'}</button>`
+    : walletAddr ? `${session ? esc(session.profile ? session.profile.username : 'signed in') : 'your wallet'}${totalsText(mineTotals)}` : '';
+  bar.innerHTML = `<span>${who}</span>
+    <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+      <span style="position:relative"><input id="c-view-input" autocomplete="off" placeholder="${Object.keys(names).length ? 'view a wallet: username or 0x...' : 'view a wallet: 0x...'}" style="font:inherit;padding:3px 8px;min-width:230px;background:transparent;color:inherit;border:1px solid currentColor">
+      <div id="c-view-suggest" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:50;background:var(--surface);border:1px solid var(--border2)"></div></span>
+      <button type="button" id="c-view-go" style="font:inherit;cursor:pointer;background:none;border:1px solid currentColor;padding:2px 8px">view</button>
+      <span id="c-view-msg" style="color:var(--muted)"></span>
+    </span>`;
+  const back = document.getElementById('c-view-back'); if (back) back.addEventListener('click', stopViewing);
+  // Signed-in profile holders can type a username; guests get wallet addresses only.
+  const input = document.getElementById('c-view-input'), box = document.getElementById('c-view-suggest');
+  const byName = () => Object.entries(names).map(([w, u]) => ({ w, u }));
+  const resolve = (v) => {
+    v = v.trim();
+    if (isAddr(v)) return v;
+    const hit = byName().find(x => x.u.toLowerCase() === v.toLowerCase());
+    return hit ? hit.w : v;
+  };
+  const go = () => { box.style.display = 'none'; viewWallet(resolve(input.value)); };
+  const suggest = () => {
+    const q = input.value.trim().toLowerCase();
+    const list = q && !q.startsWith('0x') ? byName().filter(x => x.u.toLowerCase().includes(q)).sort((a, b) => (b.u.toLowerCase().startsWith(q) - a.u.toLowerCase().startsWith(q)) || a.u.localeCompare(b.u)).slice(0, 8) : [];
+    box.innerHTML = list.map(x => `<div data-w="${esc(x.w)}" style="padding:5px 8px;cursor:pointer;display:flex;justify-content:space-between;gap:10px"><span>${esc(x.u)}</span><span style="color:var(--muted2)">${esc(short(x.w))}</span></div>`).join('');
+    box.style.display = list.length ? 'block' : 'none';
+    box.querySelectorAll('[data-w]').forEach(d => d.addEventListener('mousedown', (e) => { e.preventDefault(); input.value = names[d.dataset.w]; box.style.display = 'none'; viewWallet(d.dataset.w); }));
+  };
+  input.addEventListener('input', suggest);
+  input.addEventListener('blur', () => setTimeout(() => { box.style.display = 'none'; }, 150));
+  document.getElementById('c-view-go').addEventListener('click', go);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') go(); if (e.key === 'Escape') box.style.display = 'none'; });
+}
+function totalsText(t) { return t ? ` · ${t.pieces.toLocaleString()} pieces · ${t.editions.toLocaleString()} editions` : ''; }
+function flashViewing(msg) { renderViewing(); const m = document.getElementById('c-view-msg'); if (m) m.textContent = msg; }
+
+// ── VIEW ──────────────────────────────────────────────────────────
+function setView(v) {
+  view = v;
+  document.getElementById('view-all').classList.toggle('active', v === 'all');
+  document.getElementById('view-mine').classList.toggle('active', v === 'mine');
+  renderGrid();
+  updateStats();
+}
+
+// ── SEARCH ────────────────────────────────────────────────────────
+// Default search matches words that start with what you type, in the name or any trait value
+// in any slot ("red" finds RED and RED HOODIE, not FRED). Advanced matches anywhere in the text.
+function toggleAdvancedSearch() {
+  searchAdvanced = !searchAdvanced;
+  document.getElementById('search-advanced-btn').classList.toggle('active', searchAdvanced);
+  document.getElementById('search-input').placeholder = searchAdvanced
+    ? 'search anywhere in names and traits...'
+    : 'search by name or any trait...';
+  if (searchQ) renderGrid();
+}
+let searchRe = null;
+function onSearch() {
+  searchQ = document.getElementById('search-input').value.trim().toLowerCase();
+  const e = searchQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  searchRe = searchQ ? new RegExp('(^|[^a-z0-9])' + e) : null;
+  renderGrid();
+}
+function matchesSearch(t) {
+  if (!searchQ) return true;
+  if (searchAdvanced) return t._words.includes(searchQ) || t.tokenId === searchQ;
+  return searchRe.test(t._words) || t.tokenId === searchQ;
+}
+
+// ── FILTERS ───────────────────────────────────────────────────────
+// Built from whatever fields the catalog has, so new columns and families appear on their own.
+function buildFilters() {
+  const panel = document.getElementById('filter-panel');
+  if (!panel) return;
+  const counts = new Map();
+  for (const t of catalog) {
+    for (const [k, raw] of [['collection', t.collection], ...Object.entries(t.traits)]) {
+      if (HIDDEN_FIELDS.has(k) || COLOR_COUNT_FIELDS.has(k) || FILTER_EXCLUDE.has(k)) continue;
+      if (!counts.has(k)) counts.set(k, new Set());
+      const s = counts.get(k);
+      for (const v of Array.isArray(raw) ? raw : [raw]) if (v) s.add(v);
+    }
+  }
+  const fields = [...counts.keys()].filter(k => { const n = counts.get(k).size; return n >= 2 && n <= FILTER_MAX_VALUES; });
+  fields.sort((a, b) => {
+    const ia = FILTER_FIRST.indexOf(a), ib = FILTER_FIRST.indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    return a.localeCompare(b);
+  });
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  panel.innerHTML = fields.map(k => {
+    const values = k === 'collection' ? TABS.map(t => t.label).filter(l => counts.get(k).has(l)) : [...counts.get(k)].sort(collator.compare);
+    return `<div class="c-filter-group">
+      <div class="c-filter-group-title">${esc(fieldLabel(k))}</div>
+      <select class="c-filter-select" data-filter-key="${esc(k)}">
+        <option value="">all</option>
+        ${values.map(v => `<option value="${esc(v)}"${filters[k] === v ? ' selected' : ''}>${esc(v)}</option>`).join('')}
+      </select>
+    </div>`;
+  }).join('');
+  panel.insertAdjacentHTML('afterbegin', '<button type="button" class="c-filter-close" id="filter-close" aria-label="close filters">close filters ✕</button>');
+  document.getElementById('filter-close').addEventListener('click', toggleFilters);
+  panel.querySelectorAll('.c-filter-select').forEach(sel => sel.addEventListener('change', function () { setFilter(this.dataset.filterKey, this.value); }));
+}
+function setFilter(key, val) { if (!val) delete filters[key]; else filters[key] = val; renderActiveChips(); renderGrid(); updateStats(); }
+function renderActiveChips() {
+  const wrap = document.getElementById('active-filters');
+  if (!wrap) return;
+  const chips = Object.entries(filters).map(([k, v]) => `<div class="c-filter-chip">${esc(fieldLabel(k))}: ${esc(v)}<button data-remove-filter="${esc(k)}">×</button></div>`);
+  if (chips.length) chips.push(`<button class="c-clear-all" id="clear-all-btn">clear all</button>`);
+  wrap.innerHTML = chips.join('');
+  wrap.querySelectorAll('[data-remove-filter]').forEach(b => b.addEventListener('click', function () { removeFilter(this.dataset.removeFilter); }));
+  const c = wrap.querySelector('#clear-all-btn'); if (c) c.addEventListener('click', clearFilters);
+}
+function removeFilter(key) {
+  delete filters[key];
+  document.querySelectorAll('.c-filter-select').forEach(s => { if (s.dataset.filterKey === key) s.value = ''; });
+  renderActiveChips(); renderGrid(); updateStats();
+}
+function clearFilters() {
+  filters = {};
+  document.querySelectorAll('.c-filter-select').forEach(s => s.value = '');
+  renderActiveChips(); renderGrid(); updateStats();
+}
+function toggleFilters() {
+  const panel = document.getElementById('filter-panel'), btn = document.getElementById('filter-toggle');
+  const isOpen = panel.classList.contains('open');
+  panel.classList.toggle('open', !isOpen);
+  btn.classList.toggle('active', !isOpen);
+  btn.textContent = isOpen ? 'filters' : 'close filters';
+}
+
+// The collection menu in the code block calls this. Every collection is already loaded.
+const COLLECTION_VALUE_MAP = { univ3rs3: 'thr33som3s univ3rs3', bulk: 'thr33som3s bulk', guest: 'x thr33som3s guest artist' };
+const THR33ZI3S_LABELS = new Set(['thr33zi3s', 'thr33zi3s generation 2', 'thr33zi3s generation 3']);
+function setCollectionFilter(val) { collectionFilter = val || 'all'; renderGrid(); updateStats(); }
+function inCollection(t) {
+  if (collectionFilter === 'all') return true;
+  if (collectionFilter === 'thr33zi3s-all') return THR33ZI3S_LABELS.has(t.collection);
+  return t.collection === (COLLECTION_VALUE_MAP[collectionFilter] || collectionFilter);
+}
+
+function getFilteredTokens() {
+  if (typeof pickMode !== 'undefined' && pickMode) {
+    return catalog.filter(t => (mine[t.key] || 0) > 0 && inPlay(t) && matchesSearch(t)
+      && Object.entries(filters).every(([k, v]) => vals(t, k).includes(v)));
+  }
+  return catalog.filter(t => {
+    if (t.unminted) return false;
+    if (t.burned && !showBurned) return false;
+    if (!inCollection(t)) return false;
+    if (view === 'mine' && !isOwned(t)) return false;
+    if (!matchesSearch(t)) return false;
+    for (const [k, v] of Object.entries(filters)) if (!vals(t, k).includes(v)) return false;
+    return true;
+  });
+}
+function toggleBurned() {
+  showBurned = !showBurned;
+  const btn = document.getElementById('view-burned');
+  btn.classList.toggle('active', showBurned);
+  btn.textContent = showBurned ? '🔥 hide burned' : '🔥 show burned';
+  renderGrid(); updateStats();
+}
+
+// ── GRID (virtual scroll) ─────────────────────────────────────────
+function renderGrid() {
+  vsTokens = getFilteredTokens();
+  const grid = document.getElementById('c-grid'), count = document.getElementById('results-count');
+  if (!grid) return;
+  if (count) count.textContent = vsTokens.length + ' piece' + (vsTokens.length !== 1 ? 's' : '');
+  if (!vsTokens.length) {
+    const msg = !catalogLoaded ? 'loading the catalog...'
+      : view === 'mine' && !walletAddr && !viewed ? 'connect your wallet to see your collection'
+      : 'no pieces match your filters';
+    grid.innerHTML = '<div class="c-empty" style="grid-column:1/-1">' + msg + '</div>';
+    grid.style.minHeight = ''; grid.style.paddingTop = ''; grid.style.paddingBottom = '';
+    vsLastRange = '';
+    return;
+  }
+  vsRender(false, true);
+}
+// Draws only the cards near the screen. Cards already on screen are kept as they are (never rebuilt),
+// so their images don't reload or flicker; only cards entering or leaving the drawn range change.
+let vsLastRange = '';
+function vsRender(remeasured, force) {
+  const grid = document.getElementById('c-grid');
+  if (!grid || !vsTokens.length) return;
+  const minCard = window.matchMedia && window.matchMedia('(max-width: 800px)').matches ? 140 : 190;
+  const cols = Math.max(1, Math.floor(((grid.clientWidth || 1200) + 2) / (minCard + 2)));
+  const rows = Math.ceil(vsTokens.length / cols);
+  const scrollTop = window.scrollY, gridTop = grid.getBoundingClientRect().top + scrollTop;
+  grid.style.alignContent = 'start';
+  grid.style.alignItems = 'start';
+  const last = Math.max(0, Math.min(rows - 1, Math.ceil((scrollTop - gridTop + window.innerHeight + BUFFER * rowH) / rowH)));
+  const first = Math.min(last, Math.max(0, Math.floor((scrollTop - gridTop - BUFFER * rowH) / rowH)));
+  const slice = vsTokens.slice(first * cols, Math.min(vsTokens.length, (last + 1) * cols));
+  // Nothing to do if the same cards would be drawn in the same layout.
+  const range = `${first}|${last}|${cols}|${rowH}|${slice.length && slice[0].key}|${slice.length && slice[slice.length - 1].key}|${vsTokens.length}`;
+  if (!force && range === vsLastRange) return;
+  vsLastRange = range;
+  grid.style.paddingTop = (first * rowH) + 'px';
+  grid.style.paddingBottom = Math.max(0, (rows - last - 1) * rowH) + 'px';
+  grid.style.minHeight = (rows * rowH) + 'px';
+  // Reuse the card already drawn for each piece; build only the new ones.
+  const existing = new Map([...grid.children].filter(el => el.dataset && el.dataset.key).map(el => [el.dataset.key, el]));
+  const frag = document.createDocumentFragment(), tmp = document.createElement('div');
+  for (const t of slice) {
+    const html = renderCard(t);
+    let el = existing.get(t.key);
+    if (el && el.dataset.sig === sigOf(html)) existing.delete(t.key);
+    else { tmp.innerHTML = html; el = tmp.firstElementChild; el.dataset.sig = sigOf(html); }
+    frag.appendChild(el);
+  }
+  grid.replaceChildren(frag);
+  // Card height follows the column width (fixed 5:7 image), so measure it and redraw once if it changed.
+  const c = grid.querySelector('.c-card');
+  const h = c ? c.offsetHeight + 2 : 0;
+  if (!remeasured && h > 20 && Math.abs(h - rowH) > 1) { rowH = h; vsRender(true, true); }
+}
+// A card's markup changes when its badge, tags or state change; then (only then) it's rebuilt.
+function sigOf(html) { let x = 0; for (let i = 0; i < html.length; i++) x = (x * 31 + html.charCodeAt(i)) | 0; return String(x); }
+let vsLastWidth = window.innerWidth;
+window.addEventListener('resize', () => { if (window.innerWidth === vsLastWidth) return; vsLastWidth = window.innerWidth; if (vsTokens.length) vsRender(false, true); });
+window.addEventListener('scroll', () => {
+  if (vsFrame) return;
+  vsFrame = requestAnimationFrame(() => { vsFrame = null; if (vsTokens.length) vsRender(); });
+}, { passive: true });
+
+// Cards show the image and edition size only; everything else is in the lightbox.
+function renderCard(t) {
+  const qty = subjectQty(t);
+  const n = t.editions.circulating;
+  const eds = t.burned ? 'burned' : `${n.toLocaleString()} edition${n !== 1 ? 's' : ''}`;
+  const badge = qty ? `<div class="c-owned-badge">${viewed ? 'held' : 'owned'}${qty > 1 ? ' ×' + qty : ''}</div>` : '';
+  let pickTag = '';
+  if (typeof pickMode !== 'undefined' && pickMode === 'votes' && vState) {
+    const vt = votingToken(t), n = vUses(t.key);
+    if (vt) pickTag = `<div class="c3-picktag${n ? ' on' : ''}">${esc(n ? `${n} vote${n > 1 ? 's' : ''} in commitment` : `${vt.color} ×${vt.mult}`)}</div>`;
+  } else if (typeof pickMode !== 'undefined' && pickMode && dState) {
+    const role = dCardRole(t.key), inIns = dState.inserts[t.key];
+    const label = pickMode === 'demo' ? (role ? `in commitment: ${role.kind} · ${role.color}` : demographicOf(t)) : (inIns ? `×${inIns.toLocaleString()} in commitment` : '');
+    if (label) pickTag = `<div class="c3-picktag${role || inIns ? ' on' : ''}">${esc(label)}</div>`;
+  }
+  const picked = typeof pickMode !== 'undefined' && pickMode && (pickMode === 'votes' ? (vState && vUses(t.key) > 0) : (dState && (dCardRole(t.key) || dState.inserts[t.key])));
+  return `<div class="c-card${qty ? ' owned' : ''}${t.burned ? ' burned' : ''}${picked ? ' c3-picked' : ''}" data-key="${esc(t.key)}" data-clickable="true" title="${esc(t.name)}">
+    <div class="c-card-img-wrap">
+      ${t.img ? `<img class="c-card-img" src="${esc(t.img)}" alt="${esc(t.name)}" loading="lazy" decoding="async" onerror="this.style.display='none'">` : ''}
+      ${t.burned ? '<div class="c-burned-overlay">🔥</div>' : ''}
+      ${badge}${pickTag}
+    </div>
+    <div class="c-card-body"><div class="c-card-meta">${eds}</div></div>
+  </div>`;
+}
+
+// ── LIGHTBOX ──────────────────────────────────────────────────────
+function openLightbox(el) {
+  const t = byKey.get(el.dataset.key);
+  if (!t) return;
+  document.getElementById('lb-img').src = t.img || '';
+  document.getElementById('lb-img').alt = t.name;
+  const chainPath = t.chain === 'base' ? 'base' : 'ethereum';
+  const contract = (TAB[t.coll] && CONTRACTS[t.coll]) || '';
+  const opensea = `https://opensea.io/assets/${chainPath}/${contract}/${t.tokenId}`;
+  const explorer = t.chain === 'base' ? `https://basescan.org/token/${contract}?a=${t.tokenId}` : `https://etherscan.io/token/${contract}?a=${t.tokenId}`;
+
+  const inColl = catalog.filter(x => x.coll === t.coll);
+  const rarity = (k, v) => { const n = inColl.filter(x => vals(x, k).includes(v)).length; return n ? Math.round(n / inColl.length * 100) + '% in collection' : ''; };
+  const traits = Object.entries(t.traits).filter(([k]) => !HIDDEN_FIELDS.has(k) && !COLOR_COUNT_FIELDS.has(k));
+  const traitHtml = traits.length ? `<div><div class="c-lb-section-title">traits</div><div class="c-lb-trait-grid">
+    ${traits.flatMap(([k, raw]) => (Array.isArray(raw) ? raw : [raw]).map(v => `<div class="c-lb-trait" data-trait-key="${esc(k)}" data-trait-val="${esc(v)}" title="show every piece with this trait" style="cursor:pointer">
+      <div class="c-lb-trait-key">${esc(fieldLabel(k))}</div><div class="c-lb-trait-val">${esc(v)}</div><div class="c-lb-trait-rarity">${rarity(k, v)}</div></div>`)).join('')}
+  </div></div>` : '';
+
+  const mineQty = walletAddr ? (mine[t.key] || 0) : 0;
+  const viewedQty = viewed ? (viewed.owned[t.key] || 0) : 0;
+  const ownedHtml = [
+    mineQty ? `<div class="c-lb-owned-you">you own ${mineQty} edition${mineQty > 1 ? 's' : ''} of this piece</div>` : '',
+    viewedQty ? `<div class="c-lb-owned-you">${esc(nameOf(viewed.wallet))} holds ${viewedQty} edition${viewedQty > 1 ? 's' : ''}</div>` : '',
+  ].join('');
+  const e = t.editions;
+  const row = (k, v) => `<div class="c-lb-row"><div class="c-lb-row-key">${k}</div><div class="c-lb-row-val">${v}</div></div>`;
+
+  document.getElementById('lb-data').innerHTML = `
+    <div><div class="c-lb-collection">${esc(t.collection)}</div><div class="c-lb-name">${esc(t.name)}</div></div>
+    ${ownedHtml}
+    <div class="c-lb-desc" id="lb-desc"></div>
+    <div>
+      <div class="c-lb-section-title">editions</div>
+      ${row('in circulation', e.circulating.toLocaleString())}
+      ${row('minted', e.minted.toLocaleString())}
+      ${row('burned', e.burned.toLocaleString())}
+      ${row('holders', e.holders.toLocaleString())}
+    </div>
+    <div>
+      <div class="c-lb-section-title">details</div>
+      ${row('token id', '#' + esc(t.tokenId))}
+      ${row('chain', t.chain === 'base' ? 'base (l2)' : 'ethereum mainnet')}
+      ${row('contract', `<span style="font-size:9px">${esc(contract)}</span>`)}
+    </div>
+    ${traitHtml}
+    <div id="lb-holders"></div>
+    <div id="lb-activity"><div class="c-lb-section-title">activity</div>
+      <button type="button" class="c-lb-link" id="lb-activity-btn" style="cursor:pointer;background:none">see all token activity</button></div>
+    <div><div class="c-lb-section-title">links</div><div class="c-lb-links">
+      <a class="c-lb-link" href="${opensea}" target="_blank" rel="noopener">opensea ↗</a>
+      <a class="c-lb-link" href="${explorer}" target="_blank" rel="noopener">${t.chain === 'base' ? 'basescan' : 'etherscan'} ↗</a>
+    </div></div>`;
+  document.querySelectorAll('#lb-data [data-trait-key]').forEach(el => el.addEventListener('click', () => showTrait(el.dataset.traitKey, el.dataset.traitVal)));
+  loadDescription(t);
+  loadHolders(t);
+  const ab = document.getElementById('lb-activity-btn'); if (ab) ab.onclick = () => loadActivity(t);
+  document.getElementById('c-lb').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+// Descriptions aren't in the catalog (gen2/gen3 repeat one long text); fetch a collection's once.
+async function loadDescription(t) {
+  try {
+    if (!descCache[t.coll]) {
+      const data = await getJSON('/metadata?sheet=' + t.coll);
+      descCache[t.coll] = new Map((data.values || []).slice(1).map(r => [String(r[0] || '').trim(), r[3] || '']));
+    }
+    const d = descCache[t.coll].get(t.tokenId);
+    const el = document.getElementById('lb-desc');
+    if (el && d && document.getElementById('lb-img').alt === t.name) el.textContent = d;
+  } catch (e) {}
+}
+
+// Every holder, largest first. Click one to view that wallet.
+async function loadHolders(t) {
+  try {
+    const data = await getJSON('/holders?token=' + encodeURIComponent(t.key));
+    const el = document.getElementById('lb-holders');
+    if (!el || !data.holders.length) return;
+    // Every holder with how many editions they hold, largest first. Usernames show for signed-in profile holders.
+    const held = data.holders.reduce((s, h) => s + h.balance, 0);
+    el.innerHTML = `<div class="c-lb-section-title">holders (${data.holders.length}) · ${held.toLocaleString()} edition${held !== 1 ? 's' : ''} held</div>
+      <div class="c-lb-holders">${data.holders.map(h => `
+        <div class="c-lb-holder" data-wallet="${esc(h.wallet)}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:baseline;gap:10px" title="view this wallet">
+          <div class="c-lb-holder-addr">${esc(nameOf(h.wallet))}${h.wallet === walletAddr ? ' (you)' : ''}</div>
+          <div class="c-lb-holder-qty" style="white-space:nowrap">${h.balance.toLocaleString()} edition${h.balance !== 1 ? 's' : ''}</div>
+        </div>`).join('')}</div>`;
+    el.querySelectorAll('[data-wallet]').forEach(d => d.addEventListener('click', () => viewWallet(d.dataset.wallet)));
+  } catch (e) {}
+}
+// From a trait in the lightbox: show every piece in the universe with that trait.
+// Clears other filters and the search, switches to all collections and the full collection view.
+function showTrait(k, v) {
+  filters = { [k]: v };
+  document.querySelectorAll('.c-filter-select').forEach(s => { s.value = s.dataset.filterKey === k ? v : ''; });
+  searchQ = ''; searchRe = null;
+  const si = document.getElementById('search-input'); if (si) si.value = '';
+  collectionFilter = 'all';
+  const cs = document.getElementById('collection-select'); if (cs) cs.value = 'all';
+  closeLightbox();
+  renderActiveChips();
+  setView('all');
+  const top = document.getElementById('active-filters') || document.getElementById('c-grid');
+  if (top) top.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+// Every mint, transfer and burn of a piece, newest first, from the ledger (sales to come).
+const ADDR_LABELS = {
+  '0x0000000000000000000000000000000000000000': 'mint / burn address', '0x000000000000000000000000000000000000dead': 'burn address',
+  '0x3d373231a0a60bb6203fd1a91e3f058100c2244d': '333burn', '0xe5a97ce51460114e13b632df211896c663cbae76': '3vault.eth',
+};
+const addrLabel = (a) => ADDR_LABELS[a] || nameOf(a);
+async function loadActivity(t, shown = 25) {
+  const box = document.getElementById('lb-activity'); if (!box) return;
+  box.innerHTML = '<div class="c-lb-section-title">activity</div><div class="c-lb-row-key">loading...</div>';
+  let data;
+  try { data = await getJSON('/holders?token=' + encodeURIComponent(t.key) + '&activity=1'); }
+  catch (e) { box.innerHTML = '<div class="c-lb-section-title">activity</div><div class="c-lb-row-key">activity couldn\'t load just now.</div>'; return; }
+  if (document.getElementById('lb-img').alt !== t.name) return;   // lightbox moved on to another piece
+  const all = data.activity || [];
+  const explorer = t.chain === 'base' ? 'https://basescan.org/tx/' : 'https://etherscan.io/tx/';
+  const day = (s) => s ? new Date(s).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }).toLowerCase() : '';
+  const rows = all.slice(0, shown).map(a => {
+    const what = a.type === 'mint' ? `minted to ${esc(addrLabel(a.to))}` : a.type === 'burn' ? `burned by ${esc(addrLabel(a.from))}` : `${esc(addrLabel(a.from))} → ${esc(addrLabel(a.to))}`;
+    return `<div class="c-lb-row"><div class="c-lb-row-key">${esc(day(a.time))} · ${esc(a.type)}</div>
+      <div class="c-lb-row-val">${what} ×${a.amount} <a class="c-lb-link" style="padding:2px 6px;margin-left:4px" href="${explorer}${esc(a.tx)}" target="_blank" rel="noopener">tx ↗</a></div></div>`;
+  }).join('');
+  box.innerHTML = `<div class="c-lb-section-title">activity (${all.length})</div>${rows || '<div class="c-lb-row-key">no activity recorded.</div>'}
+    ${all.length > shown ? `<button type="button" class="c-lb-link" id="lb-activity-more" style="cursor:pointer;background:none;margin-top:8px">show ${Math.min(25, all.length - shown)} more</button>` : ''}`;
+  const more = document.getElementById('lb-activity-more'); if (more) more.onclick = () => loadActivity(t, shown + 25);
+}
+function closeLightbox() {
+  const lb = document.getElementById('c-lb'); if (lb) lb.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+const CONTRACTS = {
+  univ3rs3: '0xb20b9fb2657bc527cc8a5cb707071095113cab3b', bulk: '0x2e199bc11fa4c8918792da731328412eed861ab2',
+  thr33zi3s: '0xdee1996336fcabb458c2b92fce19cf84eb587e64', gen2: '0x8c6ebfc76199f379e706af27ad68f5340cc5b4e2',
+  gen3: '0xfdc33f1417086244e35096ff3bdf6192bd6f9f0b', guest: '0xac49356040d92ddfc37fba0385f6455d6ce1b6f6',
+};
+
+// ── STATS ─────────────────────────────────────────────────────────
+function updateStats() {
+  const visible = getFilteredTokens();
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('stat-total', visible.length.toLocaleString());
+  set('stat-collections', new Set(visible.map(t => t.collection)).size + ' of ' + TABS.length);
+  const totals = viewed ? viewed.totals : walletAddr ? mineTotals : null;
+  set('stat-owned', totals ? totals.pieces.toLocaleString() : '—');
+}
+
+// ── SORT ──────────────────────────────────────────────────────────
+// Ties fall back to collection order (univ3rs3, bulk, thr33zi3s, gen2, gen3, guest), then token ID.
+function setSort(val) { sortMode = val; sortCatalog(); renderGrid(); updateStats(); }
+// Holdings sorts depend on whose wallet is shown, so re-sort when that changes.
+function resortIfHeld() { if (sortMode.startsWith('held_')) sortCatalog(); }
+// Adds the holdings sorts to the code block's sort menu.
+function addHeldSorts() {
+  const sel = document.getElementById('sort-select');
+  if (!sel || sel.querySelector('option[value="held_desc"]')) return;
+  for (const [v, label] of [['held_desc', 'editions held (most)'], ['held_asc', 'editions held (fewest)']]) {
+    const o = document.createElement('option'); o.value = v; o.textContent = label; sel.appendChild(o);
+  }
+}
+function sortCatalog() {
+  const num = (v, d) => { const n = parseInt(v, 10); return isNaN(n) ? d : n; };
+  const time = (v, d) => { const n = v ? new Date(v).getTime() : NaN; return isNaN(n) ? d : n; };
+  const tie = (a, b) => a.order - b.order || num(a.tokenId, 0) - num(b.tokenId, 0);
+  const by = {
+    drop_date_asc:  (a, b) => time(a.drop_date, Infinity) - time(b.drop_date, Infinity),
+    drop_date_desc: (a, b) => time(b.drop_date, -Infinity) - time(a.drop_date, -Infinity),
+    name_asc:  (a, b) => a.name.localeCompare(b.name),
+    name_desc: (a, b) => b.name.localeCompare(a.name),
+    year_asc:  (a, b) => num(a.traits.card_year, 9999) - num(b.traits.card_year, 9999),
+    year_desc: (a, b) => num(b.traits.card_year, 0) - num(a.traits.card_year, 0),
+    // "edition size" = editions in circulation, from the ledger (the menu's option values are unchanged).
+    denom_asc:  (a, b) => a.editions.circulating - b.editions.circulating,
+    denom_desc: (a, b) => b.editions.circulating - a.editions.circulating,
+    // Editions held by whichever wallet the page is showing: a viewed wallet, else your own.
+    held_desc: (a, b) => subjectQty(b) - subjectQty(a),
+    held_asc:  (a, b) => subjectQty(a) - subjectQty(b),
+  }[sortMode] || (() => 0);
+  catalog.sort((a, b) => (by(a, b) || 0) || tie(a, b));
+}
+
+// ── PLAYERS: sessions, profiles, the 3l3ction ────────────────────
+// Connecting shows your holdings. To play, sign in (a free signature) and make a profile.
+// Sessions last 90 minutes or until you disconnect. Guests can browse but not play.
+const SESSION_KEY = 'c3_session';
+let session = null;        // { token, wallet, exp, profile }
+let sessionTimer = null;
+
+// A profile picture is a piece key ("univ3rs3:3010"), or a custom picture (only thr33som3s has one).
+function pfpSrc(pfp) {
+  if (!pfp) return '';
+  if (pfp.startsWith('custom:')) return API + '/profile?image=' + encodeURIComponent(pfp.slice(7));
+  const t = byKey.get(pfp); return t ? t.img : '';
+}
+async function api(path, { method = 'GET', body, auth } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (auth && session) headers.Authorization = 'Bearer ' + session.token;
+  const r = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || ('request failed: ' + r.status)); e.status = r.status; e.data = j; throw e; }
+  return j;
+}
+function logConnection(mode) {
+  if (!walletAddr) return;
+  api('/connect', { method: 'POST', body: { wallet: walletAddr, mode, page: location.pathname } }).catch(() => {});
+}
+function saveSession() { try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch (e) {} }
+function endSession(note) {
+  session = null; names = {};
+  clearTimeout(sessionTimer);
+  try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+  refreshPlayerUi();
+  if (note) flashViewing(note);
+}
+function startSessionTimer() {
+  clearTimeout(sessionTimer);
+  sessionTimer = setTimeout(() => endSession('signed out after 90 minutes. sign in again to play.'), Math.max(0, session.exp - Date.now()));
+}
+async function loadNames() {
+  if (!session || !session.profile) { names = {}; return; }
+  try { names = (await api('/names', { auth: true })).names || {}; } catch (e) { names = {}; }
+}
+async function afterSignIn() {
+  startSessionTimer();
+  await loadNames();
+  refreshPlayerUi();
+  renderViewing();
+  if (vsTokens.length) vsRender(false, true);
+}
+// On connect: reuse a live session for this wallet, else offer sign-in or guest.
+async function restoreOrAskToJoin() {
+  try { const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); if (s && s.wallet === walletAddr && s.exp > Date.now()) session = s; } catch (e) {}
+  if (session) { await afterSignIn(); return; }
+  openModal(`<h3>welcome to conn3ct</h3>
+    <p>sign in to play in 3v3nts like the 2026 3l3ction. signing is free and moves nothing.</p>
+    <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-signin">sign in to play</button><button class="c3-btn" id="c3-guest">continue as guest</button></div>
+    <p class="c3-note">guests can browse collections and wallets, but can't play.</p>`);
+  document.getElementById('c3-signin').onclick = signIn;
+  document.getElementById('c3-guest').onclick = closeModal;
+}
+async function signIn() {
+  modalMsg('check your wallet to sign...');
+  try {
+    const pre = await api('/session?wallet=' + walletAddr);
+    const signature = await provider.getSigner().signMessage(pre.message);
+    const r = await api('/session', { method: 'POST', body: { wallet: walletAddr, issuedAt: pre.issuedAt, signature } });
+    session = { token: r.token, wallet: walletAddr, exp: Date.now() + r.expiresInMinutes * 60000, profile: r.profile };
+    saveSession();
+    logConnection('player');
+    if (!r.profile) { openProfileForm(r.suggestedUsername || ''); return; }
+    if (r.pfpStale) { openProfileForm('', 'your profile painting is no longer in your collection. choose a new one from your thr33som3s pieces.'); return; }
+    closeModal();
+    await afterSignIn();
+  } catch (e) { modalMsg(e.code === 4001 || /reject|denied/i.test(e.message) ? 'signature cancelled.' : e.message); }
+}
+
+// Profile: username (required, fixed once set), a profile painting chosen from the collector's own
+// thr33som3s pieces (required, changeable), and email (optional). Nothing is uploaded.
+function openProfileForm(suggested, notice) {
+  const p = session && session.profile;
+  const owned = catalog.filter(t => (mine[t.key] || 0) > 0 && t.img);
+  let pfp = p && p.pfp && (mine[p.pfp] || p.pfp.startsWith('custom:')) ? p.pfp : '';
+  if (!owned.length) {
+    openModal(`<h3>create your profile</h3><p>a profile needs one of your thr33som3s paintings as its picture, and this wallet doesn't hold any thr33som3s pieces yet.</p><div class="c3-actions"><button class="c3-btn" id="c3-cancel">continue as guest</button></div>`);
+    document.getElementById('c3-cancel').onclick = closeModal; return;
+  }
+  openModal(`<h3>${p ? 'your profile' : 'create your profile'}</h3>
+    ${notice ? `<p class="c3-msg">${esc(notice)}</p>` : ''}
+    <label class="c3-field">username ${p ? '' : '<span class="c3-note">required. use your grotto name.</span>'}
+      <input id="c3-username" maxlength="40" value="${esc(p ? p.username : suggested)}" ${p ? 'disabled' : ''}></label>
+    <div class="c3-field">profile painting <span class="c3-note">required. choose one of your thr33som3s paintings from your collection.</span>
+      <div class="c3-pfp-row"><span id="c3-pfp-current"></span><input id="c3-pfp-search" placeholder="type a painting name, e.g. amalfitano" style="flex:1"></div>
+      <div class="c3-pfp-results" id="c3-pfp-grid"></div></div>
+    <label class="c3-field">email <span class="c3-note">optional, for offer, trade and sale notices. we suggest an address you use only for thr33som3s, not your personal email. you can change it any time.</span>
+      <input id="c3-email" type="email" value="${esc(p && p.email || '')}"></label>
+    <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-save">${p ? 'save' : 'create profile'}</button><button class="c3-btn" id="c3-cancel">${p ? 'close' : 'continue as guest'}</button></div>`);
+  const showCurrent = () => {
+    const src = pfpSrc(pfp);
+    document.getElementById('c3-pfp-current').innerHTML = src ? `<img class="c3-pfp" src="${esc(src)}" alt="">` : '<span class="c3-pfp">none yet</span>';
+  };
+  // Search by name: nothing is listed until they type; then only their own matching pieces.
+  const grid = () => {
+    const q = document.getElementById('c3-pfp-search').value.trim().toLowerCase();
+    const out = document.getElementById('c3-pfp-grid');
+    if (q.length < 2) { out.innerHTML = `<p class="c3-note">type at least two letters of a painting's name to search your ${owned.length.toLocaleString()} pieces.</p>`; return; }
+    const all = owned.filter(t => t.name.toLowerCase().includes(q));
+    const list = all.slice(0, 30);
+    out.innerHTML = list.length
+      ? list.map(t => `<button type="button" class="c3-pfp-row-opt${t.key === pfp ? ' sel' : ''}" data-pfp="${esc(t.key)}"><img src="${esc(t.img)}" alt="" loading="lazy"><span>${esc(t.name)}</span></button>`).join('')
+        + (all.length > list.length ? `<p class="c3-note">showing 30 of ${all.length}. keep typing to narrow it down.</p>` : '')
+      : '<p class="c3-note">no paintings in your collection match that name.</p>';
+    out.querySelectorAll('[data-pfp]').forEach(b => b.onclick = () => { pfp = b.dataset.pfp; showCurrent(); grid(); });
+  };
+  showCurrent(); grid();
+  document.getElementById('c3-pfp-search').addEventListener('input', grid);
+  document.getElementById('c3-cancel').onclick = closeModal;
+  document.getElementById('c3-save').onclick = async () => {
+    if (!pfp) { modalMsg('choose one of your paintings as your profile picture.'); return; }
+    modalMsg('saving...');
+    try {
+      const r = await api('/profile', { method: 'POST', auth: true, body: { username: document.getElementById('c3-username').value.trim(), pfp, email: document.getElementById('c3-email').value.trim() } });
+      session.profile = r.profile; saveSession();
+      closeModal();
+      await afterSignIn();
+    } catch (e) {
+      if (e.status === 401) { endSession('your session ended. sign in again.'); closeModal(); return; }
+      modalMsg(e.message);
+    }
+  };
+}
+
+// Phones without a wallet extension: reopen this page inside a wallet app's own browser.
+function openWalletApps() {
+  const here = location.href, hostPath = location.host + location.pathname + location.search;
+  openModal(`<h3>connect a wallet</h3>
+    <p>no wallet found in this browser. on a phone, open conn3ct inside your wallet app:</p>
+    <div class="c3-actions c3-stack">
+      <a class="c3-btn" href="https://metamask.app.link/dapp/${esc(hostPath)}">open in metamask</a>
+      <a class="c3-btn" href="https://phantom.app/ul/browse/${encodeURIComponent(here)}?ref=${encodeURIComponent(location.origin)}">open in phantom</a>
+      <a class="c3-btn" href="https://go.cb-w.com/dapp?cb_url=${encodeURIComponent(here)}">open in coinbase wallet</a>
+    </div>
+    <p class="c3-note">on a computer, install a wallet extension such as metamask, then reload this page.</p>`);
+}
+
+// The 2026 3l3ction: candidacy (Wed Oct 28, 12:00am–11:59pm EDT). One final entry per collector.
+// Which phase the 2026 3l3ction button opens to, by the clock: candidacy until demographics open.
+const L3_PHASES = ['candidacy', 'demographics', 'voting'];
+const VOTING_OPENS = Date.parse('2026-11-01T16:00:00Z');   // Sun Nov 1, 12:00pm EDT
+const DEMOGRAPHICS_OPENS = Date.parse('2026-10-30T04:00:00Z');
+const l3Default = () => (Date.now() < DEMOGRAPHICS_OPENS ? 'candidacy' : Date.now() < VOTING_OPENS ? 'demographics' : 'voting');
+const l3Tabs = (active) => `<div class="c3-tabs">${L3_PHASES.map(p => `<button type="button" class="c3-tab${p === active ? ' on' : ''}" data-l3phase="${p}">${p}</button>`).join('')}</div>`;
+document.addEventListener('click', e => { const b = e.target.closest('[data-l3phase]'); if (b) openL3ction(b.dataset.l3phase); });
+async function openL3ction(phase) {
+  phase = L3_PHASES.includes(phase) ? phase : l3Default();
+  if (phase === 'demographics') return openDemographicsPhase();
+  if (phase === 'voting') return openVotingPhase();
+  // Who you are comes first: connect, then sign in and have a profile. Only then ask the server.
+  if (!walletAddr) {
+    openModal(`<h3>2026 3l3ction</h3><p>connect your wallet and create a profile to play.</p>
+      <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-connect">connect wallet</button></div>`);
+    document.getElementById('c3-connect').onclick = () => { closeModal(); connectWallet(); };
+    return;
+  }
+  if (!session) {
+    openModal(`<h3>2026 3l3ction</h3><p>sign in and create a profile to play. signing is free and moves nothing.</p>
+      <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-signin">sign in to play</button></div>`);
+    document.getElementById('c3-signin').onclick = signIn;
+    return;
+  }
+  if (!session.profile) { openProfileForm(''); return; }
+  openModal('<h3>2026 3l3ction</h3><p>loading...</p>');
+  let info;
+  try { info = await api('/commit?phase=candidacy', { auth: true }); }
+  catch (e) {
+    if (e.status === 401) { endSession('your session ended. sign in again.'); openL3ction(); return; }
+    modalBody(`<h3>2026 3l3ction</h3><p>the 3l3ction couldn't load just now. try again in a moment.</p>
+      <div class="c3-actions"><button class="c3-btn" id="c3-retry">try again</button></div>`);
+    document.getElementById('c3-retry').onclick = openL3ction;
+    return;
+  }
+  window.__c3races = info.races;
+  const w = info.window, fmt = (s) => new Date(s).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const head = l3Tabs('candidacy') + `<h3>2026 3l3ction: candidacy</h3><p class="c3-note">entries ${fmt(w.commitOpens)} – ${fmt(w.commitCloses)} · burn confirmations ${fmt(w.confirmOpens)} – ${fmt(w.confirmCloses)}${w.testMode ? ' · rehearsal mode' : ''}</p>`;
+  if (info.entry) {
+    if (w.confirmOpen) { confirmScreen(head, info); return; }
+    const burns = info.burns || {};
+    const after = Date.now() > Date.parse(w.confirmCloses);
+    const lead = after ? 'the burn confirmation window has closed. only candidates burned on time run in their races.' : 'your candidacy entry is in and final.';
+    modalBody(head + entryHtml(info.entry.payload.entries, lead, after ? burns : null) + pledgeHtml()
+      + (after ? '' : `<p>burn confirmations open ${esc(whenText(w.confirmOpens))}, come back then to finalize your burns.</p>`));
+    return;
+  }
+  if (!w.commitOpen) {
+    const when = whenText;
+    // No entry from this wallet: before entries open, or after they've closed.
+    const msg = Date.now() < Date.parse(w.commitOpens)
+      ? `candidacy opens ${when(w.commitOpens)}. come back then to announce your candidacies.`
+      : 'candidacy entries are closed, and this wallet did not submit an entry.';
+    modalBody(head + `<p>${esc(msg)}</p>`);
+    return;
+  }
+  const allCands = catalog.filter(t => t.coll === 'univ3rs3' && String(t.traits.team || '').toLowerCase() === 'candidates' && String(t.traits.card_type || '').toLowerCase() === 'base');
+  let cands = allCands.filter(t => (mine[t.key] || 0) > 0);
+  // Rehearsal only: a wallet with no candidates can practice with all of them (the preview skips the holding check).
+  const rehearsalAll = !cands.length && w.testMode;
+  if (rehearsalAll) cands = allCands;
+  if (!cands.length) { modalBody(head + '<p>your wallet holds no 2024 candidate cards, so there is nothing to enter.</p>'); return; }
+  const races = info.races;
+  modalBody(head + (rehearsalAll ? '<p class="c3-note">rehearsal: your wallet holds no candidates, so all of them are shown for practice.</p>' : '') + `<p>assign each candidate you want to run to one race. one candidate per race; each candidate runs once. leave a candidate on "don't run" to keep it. <strong>you get one entry, and it is final.</strong></p>
+    <div class="c3-cands">${cands.map(t => { const n = mine[t.key] || 0; return `<div class="c3-cand"><span class="c3-thumb"><img src="${esc(t.img)}" alt="">${n ? `<span class="c3-held">×${n}</span>` : ''}</span><div><div>${esc(t.name)}</div><div class="c3-note">${n ? `you hold ${n} edition${n > 1 ? 's' : ''}` : 'not held (rehearsal)'}</div>
+      <select data-cand="${esc(t.key)}"><option value="">don't run</option>${races.map(([c, nm]) => `<option value="${c}">${esc(nm)}</option>`).join('')}</select></div></div>`; }).join('')}</div>
+    ${pledgeHtml()}
+    <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-review">review entry</button></div><p class="c3-msg" id="c3-msg"></p>`);
+  const sels = [...document.querySelectorAll('[data-cand]')];
+  const sync = () => { const used = new Set(sels.map(s => s.value).filter(Boolean)); sels.forEach(s => [...s.options].forEach(o => { o.disabled = o.value && o.value !== s.value && used.has(o.value); })); };
+  sels.forEach(s => s.addEventListener('change', sync));
+  document.getElementById('c3-review').onclick = async () => {
+    const entries = sels.filter(s => s.value).map(s => ({ race: s.value, candidate: s.dataset.cand }));
+    if (!entries.length) { modalMsg('choose a race for at least one candidate.'); return; }
+    modalMsg('checking your entry...');
+    let prep;
+    try { prep = await api('/commit', { method: 'POST', auth: true, body: { phase: 'candidacy', entries } }); }
+    catch (e) { if (e.status === 401) { endSession('your session ended. sign in again.'); closeModal(); return; } modalMsg(e.message); return; }
+    modalBody(head + entryHtml(entries, 'review your entry. signing submits it, and it cannot be changed.') + pledgeHtml() + `
+      <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-submit">sign and submit</button><button class="c3-btn" id="c3-back">go back</button></div><p class="c3-msg" id="c3-msg"></p>`);
+    document.getElementById('c3-back').onclick = openL3ction;
+    document.getElementById('c3-submit').onclick = async () => {
+      modalMsg('check your wallet to sign...');
+      try {
+        const signature = await provider.getSigner().signMessage(prep.message);
+        await api('/commit', { method: 'POST', auth: true, body: { phase: 'candidacy', entries, issuedAt: prep.issuedAt, signature } });
+        modalBody(head + entryHtml(entries, 'submitted. your candidacy entry is final.') + pledgeHtml() + '<p class="c3-note">come back for the burn confirmation window to confirm on-chain.</p>');
+      } catch (e) { modalMsg(e.code === 4001 || /reject|denied/i.test(e.message) ? 'signature cancelled. nothing was submitted.' : e.message); }
+    };
+  };
+}
+async function openDemographicsPhase() {
+  if (!walletAddr) { openL3ction('candidacy'); return; }  // the candidacy path shows connect / sign-in prompts
+  if (!session) { openL3ction('candidacy'); return; }
+  if (!session.profile) { openProfileForm(''); return; }
+  openModal(l3Tabs('demographics') + '<h3>2026 3l3ction: demographics</h3><p>loading...</p>');
+  let info;
+  try { info = await api('/commit?phase=demographics', { auth: true }); }
+  catch (e) { if (e.status === 401) { endSession('your session ended. sign in again.'); return; } modalBody(l3Tabs('demographics') + "<h3>2026 3l3ction: demographics</h3><p>the 3l3ction couldn't load just now. try again in a moment.</p>"); return; }
+  const w = info.window, fmt = (s) => new Date(s).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const head = l3Tabs('demographics') + `<h3>2026 3l3ction: demographics</h3><p class="c3-note">entries ${fmt(w.commitOpens)} – ${fmt(w.commitCloses)} · confirmations ${fmt(w.confirmOpens)} – ${fmt(w.confirmCloses)}${w.testMode ? ' · rehearsal mode' : ''}</p>`;
+  openDemographics(info, head);
+}
+
+// "wed, oct 28 at 12:00 am", in the collector's own time zone
+function whenText(s) { const d = new Date(s); return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }).toLowerCase()} at ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()}`; }
+
+// ── CONFIRMATIONS (any phase) ─────────────────────────────────────
+// Committed pieces move from the collector's own wallet: no approvals. One transaction per contract and
+// destination for ERC-1155 collections (a batch), one per token for ERC-721 collections. The contract's type
+// is read from the chain (ERC-165), and balances are checked before each transaction, so a piece that has
+// left the wallet is dropped with a note instead of sinking the whole transaction.
+const DEST = { '333burn': '0x3d373231a0a60bb6203fd1a91e3f058100c2244d', '3vault': '0xe5a97ce51460114e13b632df211896c663cbae76' };
+const NETWORKS = {
+  eth:  { chainId: 1, hex: '0x1', label: 'ethereum', explorer: 'https://etherscan.io/tx/' },
+  base: { chainId: 8453, hex: '0x2105', label: 'base', explorer: 'https://basescan.org/tx/',
+          add: { chainId: '0x2105', chainName: 'Base', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: ['https://mainnet.base.org'], blockExplorerUrls: ['https://basescan.org'] } },
+};
+const TOKEN_ABI = [
+  'function supportsInterface(bytes4 id) view returns (bool)',
+  'function safeBatchTransferFrom(address from, address to, uint256[] ids, uint256[] amounts, bytes data)',
+  'function balanceOfBatch(address[] accounts, uint256[] ids) view returns (uint256[])',
+  'function ownerOf(uint256 id) view returns (address)',
+  'function safeTransferFrom(address from, address to, uint256 id)',
+];
+const pieceName = (k) => (byKey.get(k) || {}).name || k;
+const sentStoreKey = (phase) => `c3_sent_${phase}_${walletAddr}`;
+function readSent(phase) { try { return JSON.parse(localStorage.getItem(sentStoreKey(phase)) || '{}'); } catch (e) { return {}; } }
+function markSent(phase, keys, hash, chain) { const s = readSent(phase); for (const k of keys) s[k] = { hash, chain, at: Date.now() }; try { localStorage.setItem(sentStoreKey(phase), JSON.stringify(s)); } catch (e) {} }
+
+// items: [{ key, dest, qty }]; status: { key: sentQty } from the ledger.
+function planSteps(items, status) {
+  const groups = new Map();
+  for (const it of items) {
+    const remaining = it.qty - (status[it.sk || it.key] || 0);
+    if (remaining <= 0) continue;
+    const coll = it.key.split(':')[0];
+    const gk = coll + '>' + it.dest;
+    if (!groups.has(gk)) groups.set(gk, { coll, chain: (TAB[coll] || {}).chain === 'base' ? 'base' : 'eth', dest: it.dest, items: [] });
+    groups.get(gk).items.push({ ...it, id: it.key.split(':')[1], remaining });
+  }
+  // Ethereum steps first, then Base.
+  return [...groups.values()].sort((a, b) => (a.chain === b.chain ? 0 : a.chain === 'eth' ? -1 : 1));
+}
+async function ensureNetwork(chain) {
+  const n = NETWORKS[chain];
+  const cur = await provider.getNetwork();
+  if (cur.chainId === n.chainId) return;
+  try { await provider.send('wallet_switchEthereumChain', [{ chainId: n.hex }]); }
+  catch (e) {
+    if (e.code === 4902 && n.add) await provider.send('wallet_addEthereumChain', [n.add]);
+    else throw new Error(`switch your wallet to ${n.label}, then try again.`);
+  }
+  provider = new ethers.providers.Web3Provider(window.ethereum);
+}
+// Runs one step. Returns { sent: [keys], dropped: [notes], hashes: [..] }.
+async function runStep(step, phase, onNote) {
+  await ensureNetwork(step.chain);
+  const signer = provider.getSigner();
+  const c = new ethers.Contract(CONTRACTS[step.coll], TOKEN_ABI, signer);
+  const is1155 = KNOWN_1155[step.coll] !== undefined ? KNOWN_1155[step.coll] : await c.supportsInterface('0xd9b67a26');
+  const to = DEST[step.dest], out = { sent: [], dropped: [], hashes: [] };
+  if (is1155) {
+    const bals = await c.balanceOfBatch(step.items.map(() => walletAddr), step.items.map(i => i.id));
+    const send = [];
+    step.items.forEach((it, i) => {
+      const have = bals[i].toNumber ? bals[i].toNumber() : Number(bals[i]);
+      if (have <= 0) out.dropped.push(`you no longer hold ${pieceName(it.key)}, so it can't be sent.`);
+      else { if (have < it.remaining) out.dropped.push(`you hold only ${have} of ${pieceName(it.key)} (committed ${it.remaining}); sending ${have}.`); send.push({ ...it, amount: Math.min(have, it.remaining) }); }
+    });
+    if (!send.length) return out;
+    onNote((out.dropped.length ? out.dropped.join(' ') + ' ' : '') + 'check your wallet to approve the transaction...');
+    const tx = await c.safeBatchTransferFrom(walletAddr, to, send.map(i => i.id), send.map(i => i.amount), '0x');
+    markSent(phase, send.map(i => i.sk || i.key), tx.hash, step.chain);
+    out.sent.push(...send.map(i => i.key)); out.hashes.push(tx.hash);
+  } else {
+    // ERC-721: one transfer per token, one wallet approval each.
+    for (const [n, it] of step.items.entries()) {
+      const owner = (await c.ownerOf(it.id).catch(() => '')).toLowerCase();
+      if (owner !== walletAddr) { out.dropped.push(`you no longer hold ${pieceName(it.key)}, so it can't be sent.`); continue; }
+      onNote(`check your wallet to approve transfer ${n + 1} of ${step.items.length}: ${pieceName(it.key)}...`);
+      const tx = await c['safeTransferFrom(address,address,uint256)'](walletAddr, to, it.id);
+      markSent(phase, [it.sk || it.key], tx.hash, step.chain);
+      out.sent.push(it.key); out.hashes.push(tx.hash);
+    }
+  }
+  return out;
+}
+// Renders the checklist for a phase's confirmation. items: [{ key, dest, qty, label? }]; status: { key: sentQty }.
+function confirmChecklist({ head, phase, items, status, closes, rerender }) {
+  const sent = readSent(phase);
+  const steps = planSteps(items, status);
+  const rowState = (it) => (status[it.sk || it.key] || 0) >= it.qty ? '<span class="c3-ok">confirmed ✓</span>'
+    : sent[it.sk || it.key] ? `<span class="c3-note">sent, waiting for the ledger</span>` : '<span class="c3-note">not yet sent</span>';
+  const allRows = items.map(it => `<div class="c3-entry-row"><span>${esc(it.label || pieceName(it.key))}${it.qty > 1 ? ' ×' + it.qty : ''}</span><span>${esc(it.dest)} · ${rowState(it)}</span></div>`).join('');
+  let html = head + `<p>confirmation is open until ${esc(whenText(closes))}. each step below is one approval in your wallet${steps.length > 1 ? ', and steps can be done in any order' : ''}.</p><div class="c3-entry">${allRows}</div>`;
+  if (!steps.length) { modalBody(html + '<p class="c3-ok">everything you committed is confirmed.</p>'); return; }
+  html += steps.map((st, i) => {
+    const waiting = st.items.every(it => sent[it.sk || it.key]);
+    const n = st.items.reduce((s, it) => s + it.remaining, 0);
+    const what = `${n} piece${n !== 1 ? 's' : ''} on ${NETWORKS[st.chain].label} to ${st.dest}`;
+    const links = [...new Set(st.items.map(it => sent[it.sk || it.key]).filter(Boolean).map(s => `<a href="${NETWORKS[s.chain].explorer}${esc(s.hash)}" target="_blank" rel="noopener">view transaction ↗</a>`))].join(' ');
+    return `<div class="c3-step"><div><strong>step ${i + 1} of ${steps.length}:</strong> ${esc(what)}</div>
+      ${links ? `<p class="c3-note">sent: ${links} the ledger records it within a few minutes.</p>` : ''}
+      ${waiting ? '' : `<button class="c3-btn c3-primary" data-step="${i}">${links ? 'send the rest of' : 'confirm'} step ${i + 1}</button>`}</div>`;
+  }).join('');
+  modalBody(html + pledgeHtml() + '<p class="c3-msg" id="c3-msg"></p>');
+  document.querySelectorAll('[data-step]').forEach(b => b.onclick = async () => {
+    try {
+      const r = await runStep(steps[Number(b.dataset.step)], phase, modalMsg);
+      if (!r.sent.length) { modalMsg(r.dropped.join(' ') || 'nothing left to send.'); return; }
+      rerender(r.dropped.join(' '));
+    } catch (e) {
+      modalMsg(e.code === 4001 || e.code === 'ACTION_REJECTED' || /reject|denied/i.test(e.message || '') ? 'transaction cancelled. nothing was sent.' : (e.reason || e.message));
+    }
+  });
+}
+
+// Candidacy: one edition of each committed candidate to 333burn.
+async function confirmScreen(head, info, note) {
+  const items = info.entry.payload.entries.map(e => ({ key: e.candidate, dest: '333burn', qty: 1, label: `${pieceName(e.candidate)} (${e.race})` }));
+  const status = Object.fromEntries(Object.keys(info.burns || {}).map(k => [k, 1]));
+  confirmChecklist({ head: head + (note ? `<p class="c3-msg">${esc(note)}</p>` : ''), phase: 'candidacy', items, status, closes: info.window.confirmCloses, rerender: (n) => confirmScreen(head, info, n) });
+}
+
+// ── DEMOGRAPHICS (rules §3) ──────────────────────────────────────
+// Entries Fri Oct 30, 12:00am–11:59pm EDT. The insert total comes from the blocks chosen; the + buttons lock
+// at the full amount, and the review button appears only when the selection matches it exactly.
+const D_TEAMS = ['NFTs', 'Monsters', 'Exes', 'Subs', 'Cat Moms', 'Cardinali', 'Coders', 'Elephant Men'];
+const D_RANGE = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => 'univ3rs3:' + (a + i));
+const D_TOKENS = {
+  'Leathers': D_RANGE(319002, 319005),
+  'Dads to Be': ['univ3rs3:313001', 'univ3rs3:313002', 'univ3rs3:313003', 'univ3rs3:318010', 'univ3rs3:80004'],
+  'Daddies to Be': D_RANGE(34401, 34404),
+  'High Waisted Brothers': ['univ3rs3:317017'],
+  'Stadium Parking Attendants': ['univ3rs3:318020'],
+  'Trash Bros': ['univ3rs3:319009', 'bulk:319007', 'bulk:319008'],
+  'Dead Dads': D_RANGE(11001, 11004),
+  'Butchers': D_RANGE(11005, 11008),
+  'Lab Rats': D_RANGE(11009, 11012),
+  // the 16 Correlated Series 1 Scoutmasters cards, #C001–#C017 (no #C015)
+  'Scoutmasters': [...D_RANGE(107001, 107014), 'univ3rs3:107016', 'univ3rs3:107017'],
+};
+const D_BY_KEY = Object.fromEntries(Object.entries(D_TOKENS).flatMap(([d, ks]) => ks.map(k => [k, d])));
+const lcs = v => String(v || '').toLowerCase();
+function demographicOf(t) {
+  if (D_BY_KEY[t.key]) return D_BY_KEY[t.key];
+  if (t.coll !== 'univ3rs3') return null;
+  const team = D_TEAMS.find(x => lcs(x) === lcs(t.traits.team)), type = lcs(t.traits.card_type);
+  if (team && ['base', 'painted', 'award'].includes(type)) return team;
+  if (lcs(t.traits.team) === 'participants' && type !== 'madn3ss') return 'Participants';
+  return null;
+}
+const isBurnable = t => t.coll === 'bulk' || (t.coll === 'univ3rs3' && lcs(t.traits.card_type) === 'insert');
+const D_CAP = [5, 10, 15, 20, 25, 35], D_STD = [0, 500, 400, 300, 200, 100], D_STR = [500, 500, 400, 300, 200, 100];
+const dCost = (kind, tiers) => (kind === 'straddle' ? D_STR : D_STD).slice(0, tiers).reduce((a, b) => a + b, 0);
+
+let dState = null;   // { demos: [{ kind, card, team, color, tiers, races: [] }], inserts: { key: qty }, search }
+function dReset() { dState = { demos: [], inserts: {}, search: '' }; }
+
+async function openDemographics(info, head) {
+  const w = info.window;
+  if (info.entry) {
+    if (w.confirmOpen) { demoConfirm(head, info); return; }
+    if (Date.now() > Date.parse(w.confirmCloses)) {
+      // All or nothing: every card and insert must have reached its destination in the window.
+      const p = info.entry.payload, sent = info.sent || {};
+      const done = p.demographics.filter(d => d.kind === 'added').every(d => (sent[d.card + '>333burn'] || 0) >= 1)
+        && p.inserts.every(i => (sent[i.key + '>3vault'] || 0) >= i.qty);
+      modalBody(head + demoSummary(p, done ? 'your demographics are confirmed and in play.' : 'your demographics entry was not fully confirmed in time, so all of its demographics and placements are void. pieces already sent will not be returned.'));
+      return;
+    }
+    modalBody(head + demoSummary(info.entry.payload, 'your demographics entry is in and final.') + pledgeHtml()
+      + (Date.now() < Date.parse(w.confirmOpens) ? `<p>confirmations open ${esc(whenText(w.confirmOpens))}, come back then to send your cards and inserts.</p>` : ''));
+    return;
+  }
+  if (!w.commitOpen) {
+    modalBody(head + `<p>${esc(Date.now() < Date.parse(w.commitOpens)
+      ? `demographics open ${whenText(w.commitOpens)}. come back then to declare your demographics.`
+      : 'demographics entries are closed, and this wallet did not submit an entry.')}</p>`);
+    return;
+  }
+  // Races where this collector ran a candidate are marked, since their placements count toward that candidate.
+  let myRaces = new Set();
+  try { const c = await api('/commit?phase=candidacy', { auth: true }); if (c.entry) myRaces = new Set(c.entry.payload.entries.map(e => e.race)); } catch (e) {}
+  if (!dState) { dReset(); dLoad(); }
+  dCtx = { head, races: info.races, myRaces };
+  openCart();
+}
+
+// Pieces the collector holds, and how many are still free to use after the cards chosen above.
+function dHeldCards() { return catalog.filter(t => (mine[t.key] || 0) > 0 && demographicOf(t)); }
+function dHeldInserts() { return catalog.filter(t => (mine[t.key] || 0) > 0 && isBurnable(t)); }
+function dCardUse(key) { return dState.demos.filter(d => d.kind !== 'straddle' && d.card === key).length; }
+function dTotals() {
+  const cost = dState.demos.reduce((s, d) => s + dCost(d.kind, d.tiers), 0);
+  const selected = Object.values(dState.inserts).reduce((s, q) => s + q, 0);
+  return { cost, selected };
+}
+function dTeams() { return dState.demos.filter(d => d.kind !== 'straddle' && d.card).map(d => ({ team: demographicOf(byKey.get(d.card)), color: d.color })); }
+
+// ── The commitment cart ──────────────────────────────────────────
+// Picks are added one at a time from the grid and kept (in this browser) until the entry is signed.
+let pickMode = null;      // null | 'demo' | 'inserts': the grid shows only pieces in play for that pick
+let dCtx = null;          // { head, races, myRaces } for the open demographics entry
+const cartKey = () => 'c3_cart_demographics_' + walletAddr;
+function dSave() { try { localStorage.setItem(cartKey(), JSON.stringify({ demos: dState.demos, inserts: dState.inserts })); } catch (e) {} }
+function dLoad() { try { const c = JSON.parse(localStorage.getItem(cartKey()) || 'null'); if (c) { dState.demos = c.demos || []; dState.inserts = c.inserts || {}; } } catch (e) {} }
+const inPlay = (t) => pickMode === 'demo' ? !!demographicOf(t) : pickMode === 'inserts' ? isBurnable(t) : pickMode === 'votes' ? !!votingToken(t) : true;
+function dCardRole(key) { return dState && dState.demos.find(d => d.kind !== 'straddle' && d.card === key); }
+
+function startPick(mode) {
+  pickMode = mode;
+  collectionFilter = 'all'; const cs = document.getElementById('collection-select'); if (cs) cs.value = 'all';
+  closeModal(); setView('mine'); renderPickBar();
+  const top = document.getElementById('c-grid'); if (top) top.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function stopPick() { pickMode = null; renderPickBar(); setView('all'); }
+
+// The bar fixed to the bottom of the screen while picking.
+function renderPickBar() {
+  let bar = document.getElementById('c3-pickbar');
+  if (!pickMode) { if (bar) bar.remove(); return; }
+  if (!bar) { bar = document.createElement('div'); bar.id = 'c3-pickbar'; bar.className = 'c3-pickbar'; document.body.appendChild(bar); }
+  if (pickMode === 'votes') {
+    const nv = vState ? vState.votes.length : 0;
+    bar.innerHTML = `<span>choose your voting tokens · ${nv} vote${nv !== 1 ? 's' : ''} in your commitment</span>
+      <span class="c3-actions" style="margin:0"><button class="c3-btn c3-primary" id="c3-viewcart">view commitment</button><button class="c3-btn" id="c3-stoppick">exit</button></span>`;
+    document.getElementById('c3-viewcart').onclick = () => { pickMode = null; renderPickBar(); setView('all'); openVoteCart(); };
+    document.getElementById('c3-stoppick').onclick = stopPick;
+    return;
+  }
+  const { cost, selected } = dTotals();
+  const n = dState.demos.filter(d => d.kind !== 'straddle').length;
+  const freeDone = dState.demos.some(d => d.kind === 'free');
+  bar.innerHTML = `<span>${pickMode === 'demo' ? (freeDone ? 'choose up to 4 added teams' : 'choose your free demographic') : 'choose your inserts'} · ${n} demographic${n !== 1 ? 's' : ''} · ${selected.toLocaleString()} of ${cost.toLocaleString()} inserts</span>
+    <span class="c3-actions" style="margin:0"><button class="c3-btn c3-primary" id="c3-viewcart">view commitment</button><button class="c3-btn" id="c3-stoppick">exit</button></span>`;
+  document.getElementById('c3-viewcart').onclick = () => { const m = pickMode; pickMode = null; renderPickBar(); setView('all'); openCart(); };
+  document.getElementById('c3-stoppick').onclick = stopPick;
+}
+
+// Tapping a card while picking opens a small chooser instead of the details.
+function openPicker(t) {
+  if (pickMode === 'votes') { openVotePicker(t); return; }
+  if (pickMode === 'demo') {
+    const team = demographicOf(t), cur = dCardRole(t.key);
+    const hasFree = dState.demos.some(d => d.kind === 'free' && d.card !== t.key);
+    const added = dState.demos.filter(d => d.kind === 'added' && d.card !== t.key).length;
+    const teamUsed = dState.demos.some(d => d.kind !== 'straddle' && d.card !== t.key && d.card && demographicOf(byKey.get(d.card)) === team);
+    // The free demographic comes first; after it, up to 4 added teams.
+    const role = cur ? cur.kind : (!hasFree ? 'free' : 'added');
+    let color = cur ? cur.color : '';
+    const full = !cur && role === 'added' && added >= 4;
+    const draw = (msg) => {
+      modalBody(`<h3>${esc(t.name)}</h3><p class="c3-note">${esc(team)} · you hold ${mine[t.key]}</p>
+        ${teamUsed ? `<p class="c3-msg">${esc(team)} is already one of your teams. for the other color, add a straddle on your commitment page.</p>`
+        : full ? '<p class="c3-msg">you already have 4 added teams, the most allowed.</p>' : `
+        <p><strong>${role === 'free' ? 'your free demographic' : `added team ${added + (cur ? 0 : 1)} of up to 4 · this card burns to 333burn`}</strong></p>
+        <div class="c3-actions">${['red', 'blue'].map(c => `<button class="c3-btn ${color === c ? 'c3-primary' : ''}" data-col="${c}">${c}</button>`).join('')}</div>
+        <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-addcart" ${color && role ? '' : 'disabled'}>${cur ? 'update your commitment' : 'add to your commitment'}</button>
+          ${cur ? '<button class="c3-btn" id="c3-rmcart">remove from your commitment</button>' : ''}</div>`}
+        <p class="c3-msg" id="c3-msg">${esc(msg || '')}</p>`);
+      document.querySelectorAll('[data-col]').forEach(b => b.onclick = () => { color = b.dataset.col; draw(); });
+      const add = document.getElementById('c3-addcart');
+      if (add) add.onclick = () => {
+        if (cur) { cur.kind = role; cur.color = color; } else dState.demos.push({ kind: role, card: t.key, team, color, tiers: 1, races: [] });
+        dSyncStraddles(); dTrimInserts(); dSave(); closeModal(); renderPickBar(); renderGrid();
+      };
+      const rm = document.getElementById('c3-rmcart');
+      if (rm) rm.onclick = () => { dState.demos = dState.demos.filter(d => d !== cur); dDropOrphanStraddles(); dTrimInserts(); dSave(); closeModal(); renderPickBar(); renderGrid(); };
+    };
+    openModal(''); draw();
+    return;
+  }
+  if (pickMode === 'inserts') {
+    const { cost, selected } = dTotals();
+    const avail = (mine[t.key] || 0) - dCardUse(t.key), cur = dState.inserts[t.key] || 0;
+    const max = Math.max(0, Math.min(avail, cur + cost - selected));
+    let qty = cur || Math.min(max, 1);
+    const draw = () => {
+      modalBody(`<h3>${esc(t.name)}</h3><p class="c3-note">you hold ${avail.toLocaleString()} · ${(cost - selected + cur).toLocaleString()} still needed for your commitment</p>
+        ${max <= 0 && !cur ? `<p class="c3-msg">${cost ? 'your commitment is already full. lower another insert on your commitment page to swap this one in.' : 'set your blocks on your commitment page first, so we know how many inserts to select.'}</p>` : `
+        <div class="c3-qty"><button class="c3-btn" id="c3-minus" ${qty <= 0 ? 'disabled' : ''}>−</button><input type="number" id="c3-q" min="0" max="${max}" value="${qty}"><button class="c3-btn" id="c3-plus" ${qty >= max ? 'disabled' : ''}>+</button>
+          <button class="c3-btn" id="c3-maxq">max (${max.toLocaleString()})</button></div>
+        <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-addcart" ${qty > 0 ? '' : 'disabled'}>${cur ? 'update your commitment' : 'add to your commitment'}</button>
+          ${cur ? '<button class="c3-btn" id="c3-rmcart">remove from your commitment</button>' : ''}</div>`}
+        <p class="c3-msg" id="c3-msg"></p>`);
+      const set = (v) => { qty = Math.max(0, Math.min(max, Math.floor(Number(v) || 0))); draw(); };
+      const g = id => document.getElementById(id);
+      if (g('c3-minus')) { g('c3-minus').onclick = () => set(qty - 1); g('c3-plus').onclick = () => set(qty + 1); g('c3-maxq').onclick = () => set(max); g('c3-q').onchange = () => set(g('c3-q').value); }
+      if (g('c3-addcart')) g('c3-addcart').onclick = () => { if (qty > 0) dState.inserts[t.key] = qty; else delete dState.inserts[t.key]; dSave(); closeModal(); renderPickBar(); renderGrid(); };
+      if (g('c3-rmcart')) g('c3-rmcart').onclick = () => { delete dState.inserts[t.key]; dSave(); closeModal(); renderPickBar(); renderGrid(); };
+    };
+    openModal(''); draw();
+  }
+}
+// A straddle is always the opposite color of its team.
+function dSyncStraddles() {
+  const teams = dTeams();
+  for (const d of dState.demos) if (d.kind === 'straddle') { const t = teams.find(x => x.team === d.team); d.color = t && t.color ? (t.color === 'red' ? 'blue' : 'red') : ''; }
+}
+// If the cost drops or a card is chosen, never leave more selected than allowed.
+function dTrimInserts() {
+  const { cost } = dTotals();
+  let total = 0;
+  for (const [k, q] of Object.entries(dState.inserts)) {
+    const avail = (mine[k] || 0) - dCardUse(k);
+    const keep = Math.max(0, Math.min(q, avail, cost - total));
+    if (keep > 0) { dState.inserts[k] = keep; total += keep; } else delete dState.inserts[k];
+  }
+}
+// A straddle without its team (the team was removed) goes too.
+function dDropOrphanStraddles() { const teams = new Set(dTeams().map(t => t.team)); dState.demos = dState.demos.filter(d => d.kind !== 'straddle' || teams.has(d.team)); }
+
+// The commitment page: everything picked, editable, removable; review once complete.
+function openCart(note) {
+  const { head, races, myRaces } = dCtx;
+  const teams = dTeams();
+  const straddleable = teams.filter(t => !dState.demos.some(d => d.kind === 'straddle' && d.team === t.team));
+  const name = k => (byKey.get(k) || {}).name || k;
+  const demoRows = dState.demos.map((d, i) => {
+    const title = d.kind === 'straddle' ? `straddle · ${esc(d.team)} (${esc(d.color || 'opposite color')})` : `${d.kind === 'free' ? 'free' : 'added · burns to 333burn'} · ${esc(demographicOf(byKey.get(d.card)) || '')} (${esc(d.color)}) · ${esc(name(d.card))}`;
+    const cap = D_CAP[d.tiers - 1];
+    const levels = D_CAP.map((c, n) => `<option value="${n + 1}" ${d.tiers === n + 1 ? 'selected' : ''}>${c} placements · ${dCost(d.kind, n + 1).toLocaleString()} inserts</option>`).join('');
+    const grid = races.map(([code, nm]) => { const on = d.races.includes(code), full = !on && d.races.length >= cap;
+      return `<label class="c3-race${on ? ' on' : ''}${full ? ' off' : ''}" title="${esc(nm)}"><input type="checkbox" data-d="${i}" data-race="${code}" ${on ? 'checked' : ''} ${full ? 'disabled' : ''}>${code}${myRaces.has(code) ? '★' : ''}</label>`; }).join('');
+    return `<div class="c3-step"><div><strong>${title}</strong> <button type="button" class="c3-link" data-rm="${i}">remove</button></div>
+      <label class="c3-note">blocks <select data-d="${i}" data-f="tiers">${levels}</select></label>
+      <div class="${d.races.length < cap ? 'c3-msg' : 'c3-note'}">races: ${d.races.length} of ${cap} placed${d.races.length < cap ? ` · place ${cap - d.races.length} more` : ''}${myRaces.size ? ' · ★ = your candidate runs here' : ''}</div><div class="c3-races">${grid}</div></div>`;
+  }).join('') || '<p class="c3-note">no demographics yet.</p>';
+  const { cost, selected } = dTotals();
+  const insRows = Object.entries(dState.inserts).map(([k, q]) => {
+    const avail = (mine[k] || 0) - dCardUse(k), max = Math.min(avail, q + cost - selected);
+    return `<div class="c3-ins-row"><span>${esc(name(k))} <span class="c3-note">hold ${avail.toLocaleString()}</span></span><span class="c3-qty">
+      <button class="c3-btn" data-k="${esc(k)}" data-dq="-1" ${q <= 1 ? 'disabled' : ''}>−</button><input type="number" min="1" max="${max}" value="${q}" data-k="${esc(k)}">
+      <button class="c3-btn" data-k="${esc(k)}" data-dq="1" ${q >= max ? 'disabled' : ''}>+</button><button class="c3-link" data-rmi="${esc(k)}">remove</button></span></div>`;
+  }).join('') || '<p class="c3-note">no inserts yet.</p>';
+  const ready = dState.demos.length && dState.demos.every(d => (d.kind === 'straddle' ? d.team : d.card) && d.color);
+  const unplaced = dState.demos.filter(d => d.races.length < D_CAP[d.tiers - 1]);
+  const dLabel = d => `${d.kind === 'straddle' ? d.team : demographicOf(byKey.get(d.card)) || ''} (${d.color || 'no color'})`;
+  const footer = !ready ? '<p class="c3-note">add at least one demographic to continue.</p>'
+    : unplaced.length ? `<div class="c3-counter">every placement you pay for must be placed:<br>${unplaced.map(d => `${esc(dLabel(d))}: ${d.races.length} of ${D_CAP[d.tiers - 1]} placed, place ${D_CAP[d.tiers - 1] - d.races.length} more`).join('<br>')}</div>`
+    : selected < cost ? `<p class="c3-counter">you have selected ${selected.toLocaleString()} of ${cost.toLocaleString()}</p>`
+    : '<div class="c3-actions"><button class="c3-btn c3-primary" id="c3-dreview">review entry</button></div>';
+  openModal(head + (note ? `<p class="c3-msg">${esc(note)}</p>` : '') + `<p><strong>your commitment</strong>. add pieces from the grid, edit them here, then review and sign. <strong>you get one entry, and it is final.</strong></p>
+    <h4 class="c3-h4">demographics</h4>${demoRows}
+    <div class="c3-actions"><button class="c3-btn" id="c3-browse-demo">${!dState.demos.some(d => d.kind === 'free') ? 'choose your free demographic' : dState.demos.filter(d => d.kind === 'added').length < 4 ? '+ add a team (up to 4)' : 'browse your demographic cards'}</button>${straddleable.length ? '<button class="c3-btn" id="c3-addstraddle">+ straddle</button>' : ''}</div>
+    <p><strong>your placements cost ${cost.toLocaleString()} inserts.</strong></p>
+    <h4 class="c3-h4">inserts</h4><div class="c3-ins-list">${insRows}</div>
+    <div class="c3-actions"><button class="c3-btn" id="c3-browse-ins" ${cost ? '' : 'disabled'}>+ add inserts from your collection</button></div>
+    ${pledgeHtml()}<div id="c3-dfoot">${footer}</div><p class="c3-msg" id="c3-msg"></p>`);
+  const body = document.getElementById('c3-modal-body'), redraw = () => { dSave(); openCart(); };
+  body.querySelector('#c3-browse-demo').onclick = () => startPick('demo');
+  body.querySelector('#c3-browse-ins').onclick = () => startPick('inserts');
+  const st = body.querySelector('#c3-addstraddle');
+  if (st) st.onclick = () => { dState.demos.push({ kind: 'straddle', team: straddleable[0].team, color: '', tiers: 1, races: [] }); dSyncStraddles(); redraw(); };
+  body.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { dState.demos.splice(Number(b.dataset.rm), 1); dDropOrphanStraddles(); dTrimInserts(); redraw(); });
+  body.querySelectorAll('select[data-f="tiers"]').forEach(s => s.onchange = () => { const d = dState.demos[Number(s.dataset.d)]; d.tiers = Number(s.value); d.races = d.races.slice(0, D_CAP[d.tiers - 1]); dTrimInserts(); redraw(); });
+  body.querySelectorAll('input[data-race]').forEach(c => c.onchange = () => { const d = dState.demos[Number(c.dataset.d)], r = c.dataset.race; d.races = c.checked ? [...d.races, r] : d.races.filter(x => x !== r); redraw(); });
+  const setQ = (k, v) => { const { cost, selected } = dTotals(); const avail = (mine[k] || 0) - dCardUse(k); const others = selected - (dState.inserts[k] || 0);
+    const n = Math.max(1, Math.min(Math.floor(Number(v) || 1), avail, cost - others)); dState.inserts[k] = n; redraw(); };
+  body.querySelectorAll('button[data-dq]').forEach(b => b.onclick = () => setQ(b.dataset.k, (dState.inserts[b.dataset.k] || 0) + Number(b.dataset.dq)));
+  body.querySelectorAll('input[type=number][data-k]').forEach(i => i.onchange = () => setQ(i.dataset.k, i.value));
+  body.querySelectorAll('[data-rmi]').forEach(b => b.onclick = () => { delete dState.inserts[b.dataset.rmi]; redraw(); });
+  const rv = body.querySelector('#c3-dreview'); if (rv) rv.onclick = () => dReview();
+}
+
+function dPayload() {
+  return {
+    demographics: dState.demos.map(d => ({ kind: d.kind, card: d.kind === 'straddle' ? undefined : d.card, team: d.kind === 'straddle' ? d.team : demographicOf(byKey.get(d.card)), color: d.color, tiers: d.tiers, races: d.races })),
+    inserts: Object.entries(dState.inserts).map(([key, qty]) => ({ key, qty })),
+  };
+}
+function demoSummary(p, lead) {
+  const name = k => (byKey.get(k) || {}).name || k;
+  const rows = p.demographics.map(d => `<div class="c3-entry-row"><span>${esc(d.kind)} · ${esc(d.team)} (${esc(d.color)})${d.card ? ' · ' + esc(name(d.card)) : ''}</span><span>${D_CAP[d.tiers - 1]} placements · ${d.races.length ? esc(d.races.join(' ')) : 'no races'}</span></div>`).join('');
+  const total = p.inserts.reduce((s, i) => s + i.qty, 0);
+  const ins = p.inserts.map(i => `<div class="c3-entry-row"><span>${esc(name(i.key))}</span><span>×${i.qty.toLocaleString()}</span></div>`).join('');
+  return `<p>${esc(lead)}</p><div class="c3-entry">${rows}</div>${total ? `<p><strong>inserts to 3vault: ${total.toLocaleString()}</strong></p><div class="c3-entry">${ins}</div>` : ''}`;
+}
+async function dReview() {
+  const { head } = dCtx; const payload = dPayload();
+  modalMsg('checking your entry...');
+  let prep;
+  try { prep = await api('/commit', { method: 'POST', auth: true, body: { phase: 'demographics', ...payload } }); }
+  catch (e) { if (e.status === 401) { endSession('your session ended. sign in again.'); closeModal(); return; } modalMsg(e.data && e.data.problems ? e.data.problems.join(' · ') : e.message); return; }
+  modalBody(head + demoSummary(payload, 'review your entry. signing submits it, and it cannot be changed.') + pledgeHtml()
+    + '<div class="c3-actions"><button class="c3-btn c3-primary" id="c3-dsubmit">sign and submit</button><button class="c3-btn" id="c3-dback">go back</button></div><p class="c3-msg" id="c3-msg"></p>');
+  document.getElementById('c3-dback').onclick = () => openCart();
+  document.getElementById('c3-dsubmit').onclick = async () => {
+    modalMsg('check your wallet to sign...');
+    try {
+      const signature = await provider.getSigner().signMessage(prep.message);
+      await api('/commit', { method: 'POST', auth: true, body: { phase: 'demographics', ...payload, issuedAt: prep.issuedAt, signature } });
+      modalBody(head + demoSummary(payload, 'submitted. your demographics entry is final.') + pledgeHtml() + '<p class="c3-note">come back for the confirmation window to send your cards and inserts.</p>');
+      try { localStorage.removeItem(cartKey()); } catch (e) {}
+      dState = null;
+    } catch (e) { modalMsg(e.code === 4001 || /reject|denied/i.test(e.message || '') ? 'signature cancelled. nothing was submitted.' : e.message); }
+  };
+}
+// Exact balances straight from the contracts, through public read-only connections to Ethereum and Base:
+// no wallet approval, no network switching. Several public endpoints are tried in turn; if none answers,
+// the ledger's holdings are used. A failed connection never counts as "holds 0".
+const READ_RPCS = {
+  eth: ['https://ethereum-rpc.publicnode.com', 'https://eth.llamarpc.com', 'https://rpc.ankr.com/eth'],
+  base: ['https://base-rpc.publicnode.com', 'https://mainnet.base.org', 'https://base.llamarpc.com'],
+};
+// Known token standards (univ3rs3 and bulk are ERC-1155); others are asked on-chain.
+const KNOWN_1155 = { univ3rs3: true, bulk: true };
+async function readBalances(coll, ks) {
+  const chain = (TAB[coll] || {}).chain === 'base' ? 'base' : 'eth';
+  const ids = ks.map(k => k.split(':')[1]);
+  let lastErr;
+  for (const url of READ_RPCS[chain]) {
+    try {
+      const c = new ethers.Contract(CONTRACTS[coll], TOKEN_ABI, new ethers.providers.StaticJsonRpcProvider(url, chain === 'base' ? 8453 : 1));
+      const is1155 = KNOWN_1155[coll] !== undefined ? KNOWN_1155[coll] : await c.supportsInterface('0xd9b67a26');
+      const out = {};
+      if (is1155) {
+        const bals = await c.balanceOfBatch(ids.map(() => walletAddr), ids);
+        ks.forEach((k, i) => { out[k] = bals[i].toNumber ? bals[i].toNumber() : Number(bals[i]); });
+      } else {
+        const owners = await Promise.all(ids.map(id => c.ownerOf(id)));   // a failure here tries the next endpoint
+        ks.forEach((k, i) => { out[k] = String(owners[i]).toLowerCase() === walletAddr ? 1 : 0; });
+      }
+      return out;
+    } catch (e) { lastErr = e; }
+  }
+  console.warn('conn3ct: on-chain read failed for ' + coll + ', using the ledger', lastErr);
+  return Object.fromEntries(ks.map(k => [k, mine[k] || 0]));
+}
+async function onchainHeld(keys) {
+  const byColl = {};
+  for (const k of keys) { const c = k.split(':')[0]; (byColl[c] = byColl[c] || []).push(k); }
+  const parts = await Promise.all(Object.entries(byColl).map(([coll, ks]) => readBalances(coll, ks)));
+  return Object.assign({}, ...parts);
+}
+
+// Saturday: added-team cards to 333burn, inserts to 3vault, on whichever chains they live.
+// Confirmation is all or nothing: until the wallet holds every committed piece (and the free card it must
+// keep), nothing can be sent, and the screen lists exactly what's missing.
+async function demoConfirm(head, info, note) {
+  const p = info.entry.payload;
+  try { const h = await holdingsFor(walletAddr); mine = h.owned; mineTotals = h.totals; } catch (e) {}
+  const sentNow = info.sent || {};
+  const need = new Map();
+  const addNeed = (k, n) => need.set(k, (need.get(k) || 0) + n);
+  for (const d of p.demographics) {
+    if (d.kind === 'free') addNeed(d.card, 1);                                   // kept in the wallet
+    if (d.kind === 'added') addNeed(d.card, Math.max(0, 1 - (sentNow[d.card + '>333burn'] || 0)));
+  }
+  for (const i of p.inserts) addNeed(i.key, Math.max(0, i.qty - (sentNow[i.key + '>3vault'] || 0)));
+  let have = {};
+  try { have = await onchainHeld([...need.keys()]); } catch (e) { have = mine; }
+  const missing = [...need].filter(([k, n]) => n > (have[k] || 0)).map(([k, n]) => ({ k, n, have: have[k] || 0 }));
+  if (missing.length) {
+    const rows = missing.map(m => `<div class="c3-entry-row"><span>${esc(pieceName(m.k))}</span><span>need ${m.n.toLocaleString()} · hold ${m.have.toLocaleString()} · <strong>missing ${(m.n - m.have).toLocaleString()}</strong></span></div>`).join('');
+    modalBody(head + `<p class="c3-msg">your confirmation is blocked until your wallet holds every piece you committed.</p>
+      <p>missing pieces:</p><div class="c3-entry">${rows}</div>
+      <p class="c3-note">get the missing pieces into this wallet, then check again. confirmation closes ${esc(whenText(info.window.confirmCloses))}.</p>
+      ${pledgeHtml()}<div class="c3-actions"><button class="c3-btn c3-primary" id="c3-recheck">check again</button></div><p class="c3-msg" id="c3-msg"></p>`);
+    document.getElementById('c3-recheck').onclick = async () => {
+      modalMsg('checking...');
+      try { const fresh = await api('/commit?phase=demographics', { auth: true }); demoConfirm(head, fresh); } catch (e) { modalMsg(e.message); }
+    };
+    return;
+  }
+  const items = [
+    ...p.demographics.filter(d => d.kind === 'added').map(d => ({ key: d.card, dest: '333burn', qty: 1, label: `${pieceName(d.card)} (${d.team})` })),
+    ...p.inserts.map(i => ({ key: i.key, dest: '3vault', qty: i.qty })),
+  ];
+  const sent = info.sent || {};
+  // status per item: amount already confirmed at its destination
+  const status = {};
+  for (const it of items) status[it.key + '>' + it.dest] = sent[it.key + '>' + it.dest] || 0;
+  const voidRule = '<p class="c3-note">complete every step before the deadline. if your commitment is not fully confirmed in time, all of its demographics and placements are void, and pieces already sent will not be returned.</p>';
+  confirmChecklist({ head: head + (note ? `<p class="c3-msg">${esc(note)}</p>` : '') + voidRule, phase: 'demographics', items, status, closes: info.window.confirmCloses, keyOf: it => it.key + '>' + it.dest,
+    rerender: (n) => demoConfirm(head, info, n) });
+}
+
+// ── VOTING (rules §6) ─────────────────────────────────────────────
+// Sun Nov 1, 12:00am EDT – 11:59pm EST. One vote per race, only in races with a candidate; any number of races.
+// Votes are picked from the grid (only voting tokens the collector holds) into a commitment cart, like demographics.
+const V_INSERTS = {
+  'univ3rs3:314001': ['red', 3], 'univ3rs3:316008': ['red', 3], 'univ3rs3:319002': ['red', 2],
+  'univ3rs3:314002': ['blue', 3], 'univ3rs3:316005': ['blue', 3], 'univ3rs3:319003': ['blue', 2],
+  'univ3rs3:314003': ['purple', 3], 'univ3rs3:316014': ['purple', 3], 'univ3rs3:318008': ['purple', 3], 'univ3rs3:318014': ['purple', 3], 'univ3rs3:319004': ['purple', 2],
+};
+const V_BG = { thr33zi3s: 3, gen2: 2, gen3: 1 };
+function votingToken(t) {
+  if (!t) return null;
+  if (V_INSERTS[t.key]) return { color: V_INSERTS[t.key][0], mult: V_INSERTS[t.key][1] };
+  if (t.coll === 'bulk' && lcs(t.traits.team) === 'voters') { const c = lcs(t.traits.color); return ['red', 'blue', 'purple'].includes(c) ? { color: c, mult: 1 } : null; }
+  if (V_BG[t.coll]) { const bg = String(t.traits.background || '').trim().toUpperCase(); return ['RED', 'BLUE', 'PURPLE'].includes(bg) ? { color: bg.toLowerCase(), mult: V_BG[t.coll] } : null; }
+  return null;
+}
+let vState = null, vCtx = null;   // vState: { votes: [{ race, token, declared, candidate }] }
+const vCartKey = () => 'c3_cart_voting_' + walletAddr;
+function vSave() { try { localStorage.setItem(vCartKey(), JSON.stringify(vState)); } catch (e) {} }
+function vLoad() { try { const c = JSON.parse(localStorage.getItem(vCartKey()) || 'null'); if (c && Array.isArray(c.votes)) vState = c; } catch (e) {} }
+const vUses = (key) => vState.votes.filter(v => v.token === key).length;
+const vKeep = (key) => (vCtx && vCtx.freeCard === key ? 1 : 0);
+const vAvail = (key) => (mine[key] || 0) - vKeep(key) - (V_BG[key.split(':')[0]] ? Math.max(0, (mine[key] || 0) - 1) : 0);
+
+async function openVotingPhase() {
+  if (!walletAddr || !session) { openL3ction('candidacy'); return; }
+  if (!session.profile) { openProfileForm(''); return; }
+  openModal(l3Tabs('voting') + '<h3>2026 3l3ction: voting</h3><p>loading...</p>');
+  let info, demo;
+  try { [info, demo] = await Promise.all([api('/commit?phase=voting', { auth: true }), api('/commit?phase=demographics', { auth: true }).catch(() => null)]); }
+  catch (e) { if (e.status === 401) { endSession('your session ended. sign in again.'); return; } modalBody(l3Tabs('voting') + "<h3>2026 3l3ction: voting</h3><p>the 3l3ction couldn't load just now. try again in a moment.</p>"); return; }
+  const w = info.window, fmt = (s) => new Date(s).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const head = l3Tabs('voting') + `<h3>2026 3l3ction: voting</h3><p class="c3-note">entries ${fmt(w.commitOpens)} – ${fmt(w.commitCloses)} · confirmations ${fmt(w.confirmOpens)} – ${fmt(w.confirmCloses)}${w.testMode ? ' · rehearsal mode' : ''}</p>`;
+  const freeCard = demo && demo.entry ? ((demo.entry.payload.demographics || []).find(d => d.kind === 'free') || {}).card || null : null;
+  vCtx = { head, info, ballots: info.ballots || {}, freeCard };
+  if (info.entry) {
+    if (w.confirmOpen) { voteConfirm(head, info); return; }
+    modalBody(head + voteSummary(info.entry.payload, Date.now() > Date.parse(w.confirmCloses) ? 'the voting confirmation window has closed.' : 'your voting entry is in and final.') + pledgeHtml()
+      + (Date.now() < Date.parse(w.confirmOpens) ? `<p>confirmations open ${esc(whenText(w.confirmOpens))}, come back then to send your voting tokens to 3vault.</p>` : ''));
+    return;
+  }
+  if (!w.commitOpen) {
+    modalBody(head + `<p>${esc(Date.now() < Date.parse(w.commitOpens) ? `voting opens ${whenText(w.commitOpens)}.` : 'voting entries are closed, and this wallet did not submit an entry.')}</p>`);
+    return;
+  }
+  if (!vState) { vState = { votes: [] }; vLoad(); }
+  openVoteCart();
+}
+function voteLine(v) {
+  const t = byKey.get(v.token), vt = votingToken(t) || {};
+  return `${esc(v.race)} · ${esc((t || {}).name || v.token)} · ${esc(vt.color || '')} ×${vt.mult || ''}${v.declared ? ' → ' + esc(v.declared) : ''}${v.candidate ? ' · for ' + esc(v.candidate) : ''}`;
+}
+function voteSummary(p, lead) {
+  return `<p>${esc(lead)}</p><div class="c3-entry">${p.votes.map(v => `<div class="c3-entry-row"><span>${voteLine(v)}</span></div>`).join('')}</div><p><strong>voting tokens to 3vault: ${p.votes.length}</strong></p>`;
+}
+function openVoteCart(note) {
+  const { head, ballots } = vCtx;
+  const races = Object.keys(ballots).sort();
+  const voted = new Set(vState.votes.map(v => v.race));
+  const rows = vState.votes.map((v, i) => `<div class="c3-entry-row"><span>${voteLine(v)}</span><button type="button" class="c3-link" data-vrm="${i}">remove</button></div>`).join('') || '<p class="c3-note">no votes yet.</p>';
+  const ballotList = races.map(r => `<span class="c3-race${voted.has(r) ? ' on' : ''}" title="${esc(ballots[r].candidates.join(' · '))}">${r}${ballots[r].contested ? '*' : ''}</span>`).join('');
+  openModal(head + (note ? `<p class="c3-msg">${esc(note)}</p>` : '') + `<p><strong>your votes</strong>. one vote per race, only in races with a candidate, in as many races as you like. pick tokens from your collection, then review and sign. <strong>you get one entry, and it is final.</strong></p>
+    <div class="c3-entry">${rows}</div>
+    <div class="c3-actions"><button class="c3-btn" id="c3-browse-votes">+ add votes from your collection</button></div>
+    <p class="c3-note">races with candidates (${races.length}), * contested. highlighted: you've voted there.</p><div class="c3-races">${ballotList}</div>
+    ${pledgeHtml()}<div class="c3-actions">${vState.votes.length ? '<button class="c3-btn c3-primary" id="c3-vreview">review entry</button>' : ''}</div><p class="c3-msg" id="c3-msg"></p>`);
+  document.getElementById('c3-browse-votes').onclick = () => startPick('votes');
+  document.querySelectorAll('[data-vrm]').forEach(b => b.onclick = () => { vState.votes.splice(Number(b.dataset.vrm), 1); vSave(); openVoteCart(); });
+  const rv = document.getElementById('c3-vreview'); if (rv) rv.onclick = vReview;
+}
+// Tapping a voting token in the grid: choose the race (and color for purple, candidate where contested).
+function openVotePicker(t) {
+  const vt = votingToken(t), { ballots } = vCtx;
+  const taken = new Set(vState.votes.map(v => v.race));
+  const open = Object.keys(ballots).filter(r => !taken.has(r)).sort();
+  const left = vAvail(t.key) - vUses(t.key);
+  let race = '', declared = '', candidate = '';
+  const draw = () => {
+    const b = race && ballots[race];
+    const needCand = b && b.candidates.length >= 2;
+    const ready = race && (vt.color !== 'purple' || declared) && (!needCand || candidate);
+    modalBody(`<h3>${esc(t.name)}</h3><p class="c3-note">${esc(vt.color)} ×${vt.mult} · you hold ${(mine[t.key] || 0).toLocaleString()}${vKeep(t.key) ? ' (one stays held for your free demographic)' : ''}</p>
+      ${left <= 0 ? `<p class="c3-msg">${V_BG[t.coll] ? 'a thr33zi3s votes once, and this one is already in your commitment.' : 'every edition you can use is already in your commitment.'}</p>` : !open.length ? '<p class="c3-msg">you have a vote in every race with a candidate.</p>' : `
+      <label class="c3-field">race <select id="c3-vrace"><option value="">choose a race</option>${open.map(r => `<option value="${r}" ${r === race ? 'selected' : ''}>${r} · ${esc(ballots[r].candidates.join(' · '))}</option>`).join('')}</select></label>
+      ${vt.color === 'purple' ? `<div class="c3-actions">${['red', 'blue'].map(c => `<button class="c3-btn ${declared === c ? 'c3-primary' : ''}" data-vdecl="${c}">declare ${c}</button>`).join('')}</div>` : ''}
+      ${needCand ? `<div class="c3-field">candidate<div class="c3-actions">${b.candidates.map(n => `<button class="c3-btn ${candidate === n ? 'c3-primary' : ''}" data-vcand="${esc(n)}">${esc(n)}</button>`).join('')}</div></div>` : (b ? `<p class="c3-note">candidate: ${esc(b.candidates[0])}</p>` : '')}
+      <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-vadd" ${ready ? '' : 'disabled'}>add to your commitment</button></div>`}
+      <p class="c3-msg" id="c3-msg"></p>`);
+    const rs = document.getElementById('c3-vrace'); if (rs) rs.onchange = () => { race = rs.value; candidate = ''; draw(); };
+    document.querySelectorAll('[data-vdecl]').forEach(x => x.onclick = () => { declared = x.dataset.vdecl; draw(); });
+    document.querySelectorAll('[data-vcand]').forEach(x => x.onclick = () => { candidate = x.dataset.vcand; draw(); });
+    const add = document.getElementById('c3-vadd');
+    if (add) add.onclick = () => {
+      vState.votes.push({ race, token: t.key, declared: vt.color === 'purple' ? declared : undefined, candidate: ballots[race].candidates.length >= 2 ? candidate : ballots[race].candidates[0] });
+      vSave(); closeModal(); renderPickBar(); renderGrid();
+    };
+  };
+  openModal(''); draw();
+}
+async function vReview() {
+  const { head } = vCtx, payload = { votes: vState.votes };
+  modalMsg('checking your entry...');
+  let prep;
+  try { prep = await api('/commit', { method: 'POST', auth: true, body: { phase: 'voting', ...payload } }); }
+  catch (e) { if (e.status === 401) { endSession('your session ended. sign in again.'); closeModal(); return; } modalMsg(e.data && e.data.problems ? e.data.problems.join(' · ') : e.message); return; }
+  modalBody(head + voteSummary(payload, 'review your entry. signing submits it, and it cannot be changed.') + pledgeHtml()
+    + '<div class="c3-actions"><button class="c3-btn c3-primary" id="c3-vsubmit">sign and submit</button><button class="c3-btn" id="c3-vback">go back</button></div><p class="c3-msg" id="c3-msg"></p>');
+  document.getElementById('c3-vback').onclick = () => openVoteCart();
+  document.getElementById('c3-vsubmit').onclick = async () => {
+    modalMsg('check your wallet to sign...');
+    try {
+      const signature = await provider.getSigner().signMessage(prep.message);
+      await api('/commit', { method: 'POST', auth: true, body: { phase: 'voting', ...payload, issuedAt: prep.issuedAt, signature } });
+      modalBody(head + voteSummary(payload, 'submitted. your voting entry is final.') + pledgeHtml() + '<p class="c3-note">come back for the confirmation window (mon nov 2) to send your voting tokens to 3vault.</p>');
+      try { localStorage.removeItem(vCartKey()); } catch (e) {}
+      vState = null;
+    } catch (e) { modalMsg(e.code === 4001 || /reject|denied/i.test(e.message || '') ? 'signature cancelled. nothing was submitted.' : e.message); }
+  };
+}
+// Monday: every voting token to 3vault; all or nothing; blocked until every piece (and a kept free card) is held.
+async function voteConfirm(head, info, note) {
+  const p = info.entry.payload, sentNow = info.sent || {};
+  if (!p || !Array.isArray(p.votes)) { modalBody(head + "<p>your voting entry couldn't be read. send thr33s a message.</p>"); return; }
+  const need = new Map();
+  for (const v of p.votes) need.set(v.token, (need.get(v.token) || 0) + 1);
+  for (const [k, n] of need) need.set(k, Math.max(0, n - (sentNow[k + '>3vault'] || 0)) + (vCtx && vCtx.freeCard === k ? 1 : 0));
+  let have = {};
+  try { have = await onchainHeld([...need.keys()]); } catch (e) { have = mine; }
+  const missing = [...need].filter(([k, n]) => n > (have[k] || 0)).map(([k, n]) => ({ k, n, have: have[k] || 0 }));
+  if (missing.length) {
+    modalBody(head + `<p class="c3-msg">your confirmation is blocked until your wallet holds every piece you committed.</p><p>missing pieces:</p><div class="c3-entry">${missing.map(m => `<div class="c3-entry-row"><span>${esc(pieceName(m.k))}</span><span>need ${m.n} · hold ${m.have} · <strong>missing ${m.n - m.have}</strong></span></div>`).join('')}</div>
+      <p class="c3-note">get the missing pieces into this wallet, then check again. confirmation closes ${esc(whenText(info.window.confirmCloses))}.</p>${pledgeHtml()}<div class="c3-actions"><button class="c3-btn c3-primary" id="c3-vrecheck">check again</button></div><p class="c3-msg" id="c3-msg"></p>`);
+    document.getElementById('c3-vrecheck').onclick = async () => { try { voteConfirm(head, await api('/commit?phase=voting', { auth: true })); } catch (e) { modalMsg(e.message); } };
+    return;
+  }
+  const counts = new Map(); for (const v of p.votes) counts.set(v.token, (counts.get(v.token) || 0) + 1);
+  const items = [...counts].map(([key, qty]) => ({ key, dest: '3vault', qty, sk: key + '>3vault' }));
+  const status = {}; for (const it of items) status[it.sk] = sentNow[it.sk] || 0;
+  const voidRule = '<p class="c3-note">complete every step before the deadline. if your votes are not fully confirmed in time, all of them are void, and pieces already sent will not be returned.</p>';
+  confirmChecklist({ head: head + (note ? `<p class="c3-msg">${esc(note)}</p>` : '') + voidRule, phase: 'voting', items, status, closes: info.window.confirmCloses,
+    rerender: (n) => voteConfirm(head, info, n) });
+}
+
+// thr33s's pledge, shown in capitals wherever a collector commits or reviews their candidates.
+const PLEDGE = 'YOU ARE COMMITTING THESE TOKENS TO BURN. THIS IS A SACRED ACT IN THE PROJECT. DO NOT SELL OR TRADE ANY OF YOUR COMMITS BEFORE THE CONFIRMATION WINDOW. YOU ARE RESPONSIBLE FOR BURNING THESE COMMITS, ANY FAILURE TO DO SO WILL RESULT IN SANCTIONS IN THE PROJECT AND MAY JEOPARDIZE YOUR PARTICIPATION IN THIS 3V3NT.';
+const pledgeHtml = () => `<div class="c3-pledge">${PLEDGE}</div>`;
+function entryHtml(entries, lead, burns) {
+  return `<p>${esc(lead)}</p><div class="c3-entry">${entries.map(e => { const t = byKey.get(e.candidate); const st = burns ? (burns[e.candidate] ? ' · <span class="c3-ok">burned ✓</span>' : ' · <span class="c3-note">not burned, does not run</span>') : ''; return `<div class="c3-entry-row"><span>${esc(t ? t.name : e.candidate)}</span><span>${esc(e.race)}${st}</span></div>`; }).join('')}</div>`;
+}
+
+// Modal shell, plus the 3l3ction button and profile link added to the code block's page.
+function openModal(html) {
+  let m = document.getElementById('c3-modal');
+  if (!m) { m = document.createElement('div'); m.id = 'c3-modal'; m.className = 'c3-modal'; m.innerHTML = '<div class="c3-modal-box"><button class="c3-x" id="c3-x" aria-label="close">✕</button><div id="c3-modal-body"></div></div>'; document.body.appendChild(m); m.addEventListener('click', e => { if (e.target === m) closeModal(); }); document.getElementById('c3-x').onclick = closeModal; }
+  modalBody(html); m.classList.add('open');
+}
+function modalBody(html) { const b = document.getElementById('c3-modal-body'); if (b) b.innerHTML = html + (html.includes('id="c3-msg"') ? '' : '<p class="c3-msg" id="c3-msg"></p>'); }
+function modalMsg(t) { const el = document.getElementById('c3-msg'); if (el) el.textContent = t; }
+function closeModal() { const m = document.getElementById('c3-modal'); if (m) m.classList.remove('open'); }
+function addPlayerUi() {
+  const st = document.createElement('style');
+  st.textContent = `.c3-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9500;overflow-y:auto}.c3-modal.open{display:block}
+  .c3-modal-box{position:relative;max-width:560px;margin:60px auto;background:var(--surface);border:1px solid var(--border2);padding:28px;color:var(--text);font-size:15px;line-height:1.55}
+  .c3-modal-box h3{font-weight:300;font-size:22px;margin-bottom:12px;color:var(--text) !important}.c3-modal-box p{margin:10px 0}.c3-note{color:var(--muted2);font-size:13px}.c3-msg{color:var(--accent);font-size:14px;min-height:1em}
+  .c3-x{position:absolute;top:10px;right:14px;background:none;border:none;color:var(--muted2);font-size:20px;cursor:pointer}
+  .c3-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.c3-stack{flex-direction:column}
+  .c3-btn{font:inherit;font-size:14px;letter-spacing:.06em;text-transform:lowercase;background:none;border:1px solid var(--border2);color:var(--text);padding:9px 16px;cursor:pointer;text-decoration:none;text-align:center}
+  .c3-primary{border-color:var(--accent);color:var(--accent)}.c3-btn:hover{background:var(--accent-dim)}
+  .c3-field{display:flex;flex-direction:column;gap:6px;margin:14px 0;font-size:14px}.c3-field input{font:inherit;font-size:15px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:8px 10px;text-transform:none}
+  .c3-pfp-row{display:flex;gap:10px;align-items:center}.c3-pfp{width:56px;height:78px;object-fit:contain;background:var(--surface2);border:1px solid var(--accent);display:inline-flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted2)}
+  .c3-pfp-results{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow-y:auto;margin-top:6px}
+  .c3-pfp-row-opt{display:flex;gap:10px;align-items:center;text-align:left;font:inherit;font-size:14px;color:var(--text);background:var(--surface2);border:1px solid var(--border2);padding:4px 8px;cursor:pointer;text-transform:none}
+  .c3-pfp-row-opt img{width:32px;height:45px;object-fit:contain;flex-shrink:0}.c3-pfp-row-opt.sel{border-color:var(--accent);color:var(--accent)}
+  .c3-cands{display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow-y:auto}.c3-cand{display:flex;gap:10px;align-items:center;border-bottom:1px solid var(--border);padding-bottom:8px}
+  .c3-thumb{position:relative;flex-shrink:0}.c3-cand img{width:60px;height:84px;object-fit:contain;background:var(--surface2);display:block}
+  .c3-held{position:absolute;top:3px;right:3px;background:rgba(0,0,0,.85);border:1px solid var(--accent);color:var(--accent);font-size:12px;line-height:1;padding:3px 5px}
+  .c3-cand select{font:inherit;font-size:14px;margin-top:4px;background:var(--surface2);color:var(--text);border:1px solid var(--border2);padding:5px}
+  .c3-ok{color:var(--accent)}.c3-pickbar{position:fixed;left:0;right:0;bottom:0;z-index:9400;background:var(--surface);border-top:1px solid var(--accent);padding:10px 20px calc(10px + env(safe-area-inset-bottom,0px));display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;font-size:14px;color:var(--text)}
+  .c3-picktag{position:absolute;left:6px;bottom:6px;right:6px;background:rgba(0,0,0,.8);color:var(--muted2);font-size:11px;padding:3px 6px;text-transform:lowercase}.c3-picktag.on{color:var(--accent);border:1px solid var(--accent)}
+  .c-card.c3-picked{border-color:var(--accent);outline:1px solid var(--accent)}.c3-h4{font-size:15px;font-weight:600;margin:16px 0 6px;color:var(--text)}
+  .c3-tabs{display:flex;gap:4px;margin-bottom:10px}.c3-tab{font:inherit;font-size:13px;background:none;border:1px solid var(--border2);color:var(--muted2);padding:4px 10px;cursor:pointer;text-transform:lowercase}.c3-tab.on{border-color:var(--accent);color:var(--accent)}
+  .c3-races{display:flex;flex-wrap:wrap;gap:3px}.c3-race{font-size:12px;border:1px solid var(--border2);padding:2px 5px;cursor:pointer;display:inline-flex;gap:3px;align-items:center}.c3-race input{display:none}.c3-race.on{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}.c3-race.off{opacity:.35;cursor:default}
+  .c3-link{background:none;border:none;color:var(--muted2);font:inherit;font-size:12px;cursor:pointer;text-decoration:underline;padding:0;margin-left:8px}
+  .c3-ins-list{display:flex;flex-direction:column;gap:3px;max-height:300px;overflow-y:auto}.c3-ins-row{display:flex;justify-content:space-between;gap:8px;align-items:center;border-bottom:1px solid var(--border);padding:3px 0;font-size:14px}
+  .c3-qty{display:flex;gap:3px;align-items:center}.c3-qty .c3-btn{padding:2px 9px}.c3-qty input{width:72px;font:inherit;font-size:14px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:3px 5px}
+  .c3-counter{font-size:16px;color:var(--accent);border:1px solid var(--accent-border);padding:8px 12px;text-align:center}
+  .c3-modal-box select{font:inherit;font-size:14px;background:var(--surface2);color:var(--text);border:1px solid var(--border2);padding:5px;max-width:100%}
+  .c3-step{border:1px solid var(--border2);padding:10px 12px;margin:10px 0;display:flex;flex-direction:column;gap:8px}.c3-modal-box a{color:var(--accent)}
+  .c3-pledge{margin:16px 0;padding:12px 14px;border:1px solid var(--accent);background:var(--accent-dim);color:var(--accent);font-size:13px;line-height:1.5;letter-spacing:.04em;font-weight:600;text-transform:none !important}
+  .c3-entry{border:1px solid var(--border2)}.c3-entry-row{display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border)}`;
+  document.head.appendChild(st);
+  const bar = document.querySelector('.c-view-bar');
+  if (bar && !document.getElementById('view-l3ction')) {
+    const b = document.createElement('button'); b.className = 'c-view-btn'; b.id = 'view-l3ction'; b.textContent = '2026 3l3ction';
+    b.addEventListener('click', () => openL3ction()); bar.appendChild(b);
+  }
+  const pill = document.getElementById('wallet-pill');
+  if (pill && !document.getElementById('c3-profile-link')) {
+    const a = document.createElement('button'); a.id = 'c3-profile-link'; a.textContent = 'profile'; a.hidden = true;
+    a.style.cssText = 'background:none;border:none;color:var(--muted2);font:inherit;font-size:12px;cursor:pointer;padding:0';
+    a.addEventListener('click', () => openProfileForm('')); pill.insertBefore(a, document.getElementById('disconnect-btn'));
+  }
+  refreshPlayerUi();
+}
+function refreshPlayerUi() {
+  const pill = document.getElementById('wallet-addr');
+  if (pill && walletAddr) {
+    const pf = session && session.profile;
+    const src = pf && pfpSrc(pf.pfp);
+    pill.innerHTML = pf ? `${src ? `<img src="${esc(src)}" alt="" style="width:22px;height:25px;object-fit:contain;vertical-align:middle;margin-right:6px">` : ''}${esc(pf.username)}` : esc(short(walletAddr));
+  }
+  const link = document.getElementById('c3-profile-link'); if (link) link.hidden = !(session && session.profile);
+}
+
+// ── INIT (Squarespace: wait for the code block's elements) ───────
+function show(id, on) { const el = document.getElementById(id); if (el) el.style.display = on ? (id === 'connect-btn' ? 'inline-block' : 'block') : 'none'; }
+function initApp() {
+  if (appInitialized) return;
+  if (!document.getElementById('connect-btn')) { setTimeout(initApp, 100); return; }
+  appInitialized = true;
+  const on = (id, ev, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(ev, fn); };
+  on('connect-btn', 'click', connectWallet);
+  on('disconnect-btn', 'click', disconnect);
+  on('view-all', 'click', () => setView('all'));
+  on('view-mine', 'click', () => setView('mine'));
+  on('view-burned', 'click', toggleBurned);
+  // The code block's collection menu (#collection-select) has no handler of its own.
+  // Its markup preselects univ3rs3, so set it to match the default here.
+  on('collection-select', 'change', function () { setCollectionFilter(this.value); });
+  const cs = document.getElementById('collection-select'); if (cs) cs.value = DEFAULT_COLLECTION;
+  on('sort-select', 'change', function () { setSort(this.value); });
+  on('search-input', 'input', onSearch);
+  on('search-advanced-btn', 'click', toggleAdvancedSearch);
+  on('filter-toggle', 'click', toggleFilters);
+  on('lb-close', 'click', closeLightbox);
+  on('c-lb', 'click', function (e) { if (e.target === this) closeLightbox(); });
+  on('c-grid', 'click', e => { const card = e.target.closest('[data-clickable]'); if (!card) return;
+    if (typeof pickMode !== 'undefined' && pickMode) { const t = byKey.get(card.dataset.key); if (t) openPicker(t); } else openLightbox(card); });
+  const si = document.getElementById('search-input'); if (si) si.placeholder = 'search by name or any trait...';
+  addHeldSorts();
+  addPlayerUi();
+  renderViewing();
+  loadCatalog();
+  if (window.ethereum) {
+    window.ethereum.request({ method: 'eth_accounts' }).then(accounts => {
+      if (accounts.length) { provider = new ethers.providers.Web3Provider(window.ethereum); walletAddr = accounts[0].toLowerCase(); onConnected(); }
+    }).catch(() => {});
+  }
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeLightbox(); closeModal(); } });
+(function waitForEthers() { if (typeof ethers === 'undefined') { setTimeout(waitForEthers, 100); return; } initApp(); })();
+</script>
