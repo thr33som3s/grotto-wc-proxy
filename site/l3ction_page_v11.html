@@ -41,6 +41,7 @@
 .l3-dgroup { margin:10px 0 14px }
 .l3-dgh { font-size:13px; color:var(--text); margin-bottom:6px; letter-spacing:.06em }
 .l3-who { color:var(--accent) }
+.l3-dim { color:var(--muted) }
 .l3-thumb.won img { outline:2px solid var(--accent) }
 .l3-check { font-size:14px; fill:var(--accent); text-anchor:middle; pointer-events:none }
 .l3-tip { position:absolute; pointer-events:none; background:#000; border:1px solid var(--accent); padding:10px 12px; font-size:13px; max-width:280px; display:none; z-index:5 }
@@ -280,7 +281,7 @@
   function demoSection(dm) {
     return `<div class="l3-dsec"><h4>demographics · red ${dm.red} · blue ${dm.blue} · ${esc(dm.color)}</h4>`
       + dm.groups.map(g => `<div class="l3-dgroup"><div class="l3-dgh">${esc(g.team)} · ${esc(g.color)}${g.count > 1 ? ' · ×' + g.count : ''}</div><div class="l3-thumbs">`
-        + g.cards.map(c => `<div class="l3-thumb"><div class="l3-tw">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : '<img alt="">'}${c.count > 1 ? `<span class="l3-badge">×${c.count}</span>` : ''}</div>${esc(c.name)}<br><span class="l3-who">${c.collectors.map(esc).join(' · ')}</span></div>`).join('')
+        + g.cards.map(c => `<div class="l3-thumb"><div class="l3-tw">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : '<img alt="">'}${c.count > 1 ? `<span class="l3-badge">×${c.count}</span>` : ''}</div>${esc(c.name)}${c.straddle ? '<br><span class="l3-dim">straddle</span>' : ''}<br><span class="l3-who">${c.collectors.map(esc).join(' · ')}</span></div>`).join('')
         + '</div></div>').join('') + '</div>';
   }
   function closeState() { $('l3-detail').classList.remove('open'); }
