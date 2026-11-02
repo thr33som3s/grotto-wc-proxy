@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
 <script>
-// CONN3CT v48. Page Header Code Injection for thr33som3s.com/conn3ct. Pairs with code block v3.
+// CONN3CT v49. Page Header Code Injection for thr33som3s.com/conn3ct. Pairs with code block v3.
 // Adds profiles, sign-in, the 3l3ction candidacy screen, and opening the page inside wallet apps on phones.
 // All data comes from the proxy: /api/catalog (metadata, families, editions), /api/holdings
 // (any wallet's balances) and /api/holders (who holds a piece). Those read the ledger, which
@@ -1358,11 +1358,13 @@ async function demoConfirm(head, info, note) {
   const sentNow = info.sent || {};
   const need = new Map();
   const addNeed = (k, n) => need.set(k, (need.get(k) || 0) + n);
+  const justSent = readSent('demographics');   // sent from this page, before the ledger records it
+  const left = (k, dest, q) => justSent[k + '>' + dest] ? 0 : Math.max(0, q - (sentNow[k + '>' + dest] || 0));
   for (const d of p.demographics) {
     if (d.kind === 'free') addNeed(d.card, 1);                                   // kept in the wallet
-    if (d.kind === 'added') addNeed(d.card, Math.max(0, 1 - (sentNow[d.card + '>333burn'] || 0)));
+    if (d.kind === 'added') addNeed(d.card, left(d.card, '333burn', 1));
   }
-  for (const i of p.inserts) addNeed(i.key, Math.max(0, i.qty - (sentNow[i.key + '>3vault'] || 0)));
+  for (const i of p.inserts) addNeed(i.key, left(i.key, '3vault', i.qty));
   let have = {};
   try { have = await onchainHeld([...need.keys()]); } catch (e) { have = mine; }
   const missing = [...need].filter(([k, n]) => n > (have[k] || 0)).map(([k, n]) => ({ k, n, have: have[k] || 0 }));
@@ -1514,9 +1516,10 @@ async function vReview() {
 async function voteConfirm(head, info, note) {
   const p = info.entry.payload, sentNow = info.sent || {};
   if (!p || !Array.isArray(p.votes)) { modalBody(head + "<p>your voting entry couldn't be read. send thr33s a message.</p>"); return; }
-  const need = new Map();
+  const need = new Map(), justSent = readSent('voting');
   for (const v of p.votes) need.set(v.token, (need.get(v.token) || 0) + 1);
-  for (const [k, n] of need) need.set(k, Math.max(0, n - (sentNow[k + '>3vault'] || 0)) + (vCtx && vCtx.freeCard === k ? 1 : 0));
+  // A piece sent from this page counts as sent even before the ledger records it (a few minutes).
+  for (const [k, n] of need) need.set(k, (justSent[k + '>3vault'] ? 0 : Math.max(0, n - (sentNow[k + '>3vault'] || 0))) + (vCtx && vCtx.freeCard === k ? 1 : 0));
   let have = {};
   try { have = await onchainHeld([...need.keys()]); } catch (e) { have = mine; }
   const missing = [...need].filter(([k, n]) => n > (have[k] || 0)).map(([k, n]) => ({ k, n, have: have[k] || 0 }));
