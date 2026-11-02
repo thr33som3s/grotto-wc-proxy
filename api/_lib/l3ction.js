@@ -375,3 +375,44 @@ export function votingIndex(payload, tokens, wallet, username) {
     rows: payload.votes.map((v) => { const t = tokens.get(v.token), vt = votingToken(t) || {};
       return [v.race, RACE_NAME[v.race] || "", t?.name || v.token, v.token, vt.color || "", v.declared || "", vt.mult || "", v.candidate || "", username || "", wallet]; }) }];
 }
+
+// ── Demographics reveal (map) ────────────────────────────────────
+// Every confirmed demographics entry's placements, race by race, grouped by demographic and color, with each
+// card, its image, how many times it was placed there, and who placed it. An entry counts when every piece it
+// committed reached its destination inside the collector's confirmation window. An entry not confirmed by its
+// deadline keeps only its free demographic (thr33s, Nov 2): the free card's first 5 races.
+// assume: wallets to treat as confirmed (thr33s's preview only).
+export function demographicsReveal(entries, transfers, tokens, now = Date.now(), assume = new Set()) {
+  const races = {};
+  const add = (race, d, collector) => {
+    const r = races[race] = races[race] || { red: 0, blue: 0, groups: [] };
+    r[d.color] = (r[d.color] || 0) + 1;
+    let g = r.groups.find((x) => x.team === d.team && x.color === d.color);
+    if (!g) r.groups.push(g = { team: d.team, color: d.color, count: 0, cards: [] });
+    g.count++;
+    const key = d.card || `straddle:${d.team}`;
+    let c = g.cards.find((x) => x.key === key);
+    if (!c) g.cards.push(c = { key, name: d.card ? (tokens.get(d.card)?.name || d.card) : `${d.team} (straddle)`, image: d.card ? (tokens.get(d.card)?.image || "") : "", kind: d.kind, count: 0, collectors: [] });
+    c.count++; c.collectors.push(collector);
+  };
+  const status = {};
+  for (const e of entries) {
+    const wallet = String(e.wallet).toLowerCase(), who = e.username || wallet.slice(0, 6);
+    const win = windowState("demographics", now, wallet);
+    const [from, to] = confirmSpan(e, win);
+    const sent = sentTo(demographicsItems(e.payload), wallet, transfers, from, to);
+    const confirmed = assume.has(wallet) || Object.values(sent).every((s) => s.sent >= s.qty);
+    const closed = now > Date.parse(win.confirmCloses);
+    status[who] = confirmed ? "confirmed" : closed ? "free demographic only" : "not yet confirmed";
+    for (const d of e.payload.demographics || []) {
+      if (confirmed) { for (const race of d.races) add(race, d, who); continue; }
+      if (closed && d.kind === "free") for (const race of d.races.slice(0, 5)) add(race, d, who);
+    }
+  }
+  for (const r of Object.values(races)) {
+    r.color = r.red > r.blue ? "red" : r.blue > r.red ? "blue" : "purple";
+    r.groups.sort((a, b) => b.count - a.count || a.team.localeCompare(b.team));
+  }
+  return { races, status };
+}
+export const DEMOGRAPHICS_REVEALED = false;   // flipped by thr33s's word, once every demographics entry is final

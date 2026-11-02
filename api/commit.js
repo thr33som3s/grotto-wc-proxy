@@ -9,7 +9,7 @@ import { readHoldings, readTransfers, readUsResults } from "./_lib/ledger.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
   univ3rs3Tokens, collectionTokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, candidateRaces, shortName,
-  candidacyIndex, demographicsIndex, votingToken, checkVotes, votingMessage, votingItems, votingIndex } from "./_lib/l3ction.js";
+  candidacyIndex, demographicsIndex, demographicsReveal, DEMOGRAPHICS_REVEALED, votingToken, checkVotes, votingMessage, votingItems, votingIndex } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -94,6 +94,15 @@ async function map(res, KEY, wallet) {
     const cr = candidateRaces(commitments, transfers, names, images);
     out.candidateCount = cr.total;
     if (preview || now > Date.parse(PHASES.demographics.commitCloses)) out.ballots = cr.races;
+    // Demographics: hidden until thr33s says; his preview counts chris trueman as confirmed (Nov 2).
+    if (preview || DEMOGRAPHICS_REVEALED) {
+      const [{ commitments: demos = [] }, bulk] = await Promise.all([store("list_commitments", { phase: storedPhase("demographics") }), collectionTokens(KEY, "bulk").catch(() => [])]);
+      const tokens = new Map([...univ, ...bulk].map((t) => [t.key, t]));
+      const assume = preview && !DEMOGRAPHICS_REVEALED ? new Set(["0x35cd6404a0ae7d84bf7dabc3681af9aadca10457"]) : new Set();
+      const rv = demographicsReveal(demos, transfers, tokens, now, assume);
+      out.demographics = rv.races;
+      if (preview) out.demographicsStatus = rv.status;
+    }
   }
   return res.status(200).json(out);
 }
