@@ -70,7 +70,7 @@
     </div>
   </div>
 
-  <div class="l3-previewbar" id="l3-preview">preview · only you can see this. demographics are hidden from visitors until you say; this preview counts chris trueman as confirmed.</div>
+  <div class="l3-previewbar" id="l3-preview">preview · only you can see this. preliminary results: voting entries still waiting on their burns are counted, marked pending.</div>
   <div class="l3-mapwrap"><div class="l3-map" id="l3-map">loading the map...</div><div class="l3-tip" id="l3-tip"></div></div>
   <div class="l3-detail" id="l3-detail"><div class="l3-detail-box"><button class="l3-x" id="l3-x" aria-label="minimize">✕</button><div id="l3-detail-body"></div></div></div>
   <div class="l3-legend" id="l3-legend"></div>
@@ -125,7 +125,14 @@
 
   // Grotto view: a race with candidates is filled with their paintings, clipped to the state's shape.
   // Several different candidates split the state into equal vertical strips, one painting each.
-  const showPaintings = (info) => view === 'grotto' && info.ballot && (info.ballot.images || []).some(Boolean);
+  const resultOf = (st) => (data.results || {})[st] || null;
+  // grotto view: during the 3l3ction every candidate; once results exist, the winner alone (in the race color)
+  const artFor = (st, info) => {
+    const r = resultOf(st);
+    if (r) return r.winner && r.winner.image ? { images: [r.winner.image], color: r.color } : null;
+    return info.ballot && (info.ballot.images || []).some(Boolean) ? { images: info.ballot.images, color: info.demo && info.demo.color } : null;
+  };
+  const showPaintings = (info, st) => view === 'grotto' && !!artFor(st || info.st, info);
   // The color a race's demographics set, laid over its candidate paintings as a translucent wash.
   // Each painting is redrawn in one color: its brightness kept, mapped from a deep shade of the race color
   // (shadows) to a light tint of it (highlights), like a duotone print. None of the painting's own color remains.
@@ -139,9 +146,9 @@
   }
   const monoAttr = (color) => MONO_BASE[color] ? ` filter="url(#l3-mono-${color})"` : '';
   function paintings(st, info, clipShape, x0, y0, w, h) {
-    const imgs = info.ballot.images, n = imgs.length, sw = w / n;
+    const art = artFor(st, info), imgs = art.images, n = imgs.length, sw = w / n;
     return `<clipPath id="l3-clip-${st}">${clipShape}</clipPath><g clip-path="url(#l3-clip-${st})">`
-      + imgs.map((src, i) => src ? `<image href="${esc(src)}" x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" preserveAspectRatio="xMidYMid slice"${monoAttr(info.demo && info.demo.color)}></image>` : `<rect x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" fill="var(--none)"></rect>`).join('')
+      + imgs.map((src, i) => src ? `<image href="${esc(src)}" x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" preserveAspectRatio="xMidYMid slice"${monoAttr(art.color)}></image>` : `<rect x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" fill="var(--none)"></rect>`).join('')
       + (n > 1 ? imgs.slice(1).map((_, i) => `<line x1="${x0 + (i + 1) * sw}" y1="${y0}" x2="${x0 + (i + 1) * sw}" y2="${y0 + h}" stroke="var(--bg)" stroke-width="1.5"></line>`).join('') : '')
       + '</g>';
   }
@@ -153,7 +160,7 @@
     for (const f of states) {
       const st = BY_NAME[f.properties.name]; if (!st) continue;
       const info = stateInfo(st), d = path(f);
-      if (showPaintings(info)) {
+      if (showPaintings(info, st)) {
         const [[x0, y0], [x1, y1]] = path.bounds(f);
         svg += paintings(st, info, `<path d="${d}"></path>`, x0, y0, x1 - x0, y1 - y0);
         svg += `<path class="l3-state race" data-st="${st}" d="${d}" fill="rgba(0,0,0,0)"></path>`;
@@ -170,7 +177,7 @@
     let svg = `<svg viewBox="0 0 ${11 * (S + G)} ${8 * (S + G)}" role="img" aria-label="tile map of the 2026 senate races">${defs()}`;
     for (const [st, [c, r]] of Object.entries(TILES)) {
       const info = stateInfo(st), x = c * (S + G), y = r * (S + G);
-      if (showPaintings(info)) {
+      if (showPaintings(info, st)) {
         svg += paintings(st, info, `<rect x="${x}" y="${y}" width="${S}" height="${S}"></rect>`, x, y, S, S);
         svg += `<rect class="l3-state race" data-st="${st}" x="${x}" y="${y}" width="${S}" height="${S}" fill="rgba(0,0,0,0)"></rect>`;
         svg += `<text class="l3-tilelabel l3-onart" x="${x + S / 2}" y="${y + S - 6}">${st}</text>`;
@@ -247,7 +254,7 @@
   function openState(st) {
     const info = stateInfo(st), res = (data.results || {})[st] || null, sh = bigShape(st);
     let art;
-    if (res && res.winner && res.winner.image) art = bigFill(st, sh, [res.winner.image]);
+    if (res && res.winner && res.winner.image) art = bigFill(st, sh, [res.winner.image], res.color);
     else if (res) art = sh.el(COLOR[res.color] || 'var(--none)');
     else if (info.ballot && (info.ballot.images || []).some(Boolean)) art = bigFill(st, sh, info.ballot.images, info.demo && info.demo.color);
     else art = sh.el(fillFor(info).startsWith('url(') ? 'var(--none)' : fillFor(info));
@@ -256,10 +263,7 @@
       <div class="l3-dname">${esc(NAMES[st])}</div>
       <div class="l3-dsub">united states: ${us} · grotto: ${res ? (res.color ? esc(res.color) : 'vacant') : 'not yet decided'}${res && res.consensus ? ' · ✓ consensus' : ''}</div>`;
     if (res) {
-      if ((res.candidates || []).length) html += `<div class="l3-dsec"><h4>candidates</h4><div class="l3-thumbs">${res.candidates.map(c => thumb(c.image, [c.name, c.collector ? 'run by ' + c.collector : '', c.won ? 'winner' : ''], c.won)).join('')}</div></div>`;
-      if ((res.demographics || []).length) html += `<div class="l3-dsec"><h4>demographics</h4><div class="l3-thumbs">${res.demographics.map(d => thumb(d.image, [d.team + ' · ' + d.color, d.kind ? d.kind : '', d.collector])).join('')}</div></div>`;
-      if ((res.votes || []).length) html += `<div class="l3-dsec"><h4>votes</h4><div class="l3-thumbs">${res.votes.map(v => thumb(v.image, [`${v.color}${v.declared ? ' → ' + v.declared : ''} ×${v.multiplier}`, v.candidate ? 'for ' + v.candidate : '', v.collector])).join('')}</div></div>`;
-      if (!(res.candidates || []).length && !(res.demographics || []).length && !(res.votes || []).length) html += '<p class="l3-dsub">no candidates, demographics or votes: vacant.</p>';
+      html += resultSections(res, info);
     }
     if (!res && info.ballot) {
       html += `<div class="l3-dsec"><h4>${info.ballot.contested ? 'contested · ' : ''}candidates</h4><div class="l3-thumbs">${info.ballot.candidates.map((n, i) => thumb((info.ballot.images || [])[i], [n])).join('')}</div>
@@ -283,6 +287,25 @@
       + dm.groups.map(g => `<div class="l3-dgroup"><div class="l3-dgh">${esc(g.team)} · ${esc(g.color)}${g.count > 1 ? ' · ×' + g.count : ''}</div><div class="l3-thumbs">`
         + g.cards.map(c => `<div class="l3-thumb"><div class="l3-tw">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : '<img alt="">'}${c.count > 1 ? `<span class="l3-badge">×${c.count}</span>` : ''}</div>${esc(c.name)}${c.straddle ? '<br><span class="l3-dim">straddle</span>' : ''}<br><span class="l3-who">${c.collectors.map(esc).join(' · ')}</span></div>`).join('')
         + '</div></div>').join('') + '</div>';
+  }
+  // Results in a state: the totals, candidates (with who ran them and their support), demographics (grouped),
+  // and votes grouped by token, candidate and declared color, with a ×N badge and every voter.
+  function resultSections(res, info) {
+    let s = `<div class="l3-dsec"><h4>result · ${esc(res.color || 'vacant')}${res.decidedByTimestamp ? ' · tie decided by first vote' : ''}</h4>
+      <p class="l3-dsub" style="text-align:left">red ${res.red} (placements ${res.placementRed} + votes ${res.voteRed}) · blue ${res.blue} (placements ${res.placementBlue} + votes ${res.voteBlue})</p></div>`;
+    if ((res.candidates || []).length) {
+      const seen = new Map();
+      for (const c of res.candidates) { const k = c.name; if (!seen.has(k)) seen.set(k, { ...c, collectors: [] }); seen.get(k).collectors.push(c.collector); }
+      s += `<div class="l3-dsec"><h4>${res.contested ? 'contested · ' : ''}candidates</h4><div class="l3-thumbs">${[...seen.values()].map(c => `<div class="l3-thumb${c.won ? ' won' : ''}"><div class="l3-tw">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : '<img alt="">'}${c.collectors.length > 1 ? `<span class="l3-badge">×${c.collectors.length}</span>` : ''}</div>${esc(c.name)}${c.won ? ' · <span class="l3-who">winner</span>' : ''}${res.candidateVotes && res.candidateVotes[c.name] != null ? `<br><span class="l3-dim">support ${res.candidateVotes[c.name]}</span>` : ''}<br><span class="l3-who">run by ${c.collectors.map(esc).join(' · ')}</span></div>`).join('')}</div></div>`;
+    }
+    if (info.demo) s += demoSection(info.demo);
+    if ((res.votes || []).length) {
+      const g = new Map();
+      for (const v of res.votes) { const k = [v.token, v.candidate, v.declared, v.multiplier].join('|'); if (!g.has(k)) g.set(k, { ...v, voters: [] }); g.get(k).voters.push(v.collector + (v.pending ? ' (pending)' : '')); }
+      s += `<div class="l3-dsec"><h4>votes · ${res.votes.length}</h4><div class="l3-thumbs">${[...g.values()].map(v => `<div class="l3-thumb"><div class="l3-tw">${v.image ? `<img src="${esc(v.image)}" alt="" loading="lazy">` : '<img alt="">'}${v.voters.length > 1 ? `<span class="l3-badge">×${v.voters.length}</span>` : ''}</div>${esc(v.color)}${v.declared ? ' → ' + esc(v.declared) : ''} ×${v.home ? v.multiplier / 2 : v.multiplier}${v.home ? ` · <span class="l3-who">home county: counts ${v.multiplier}</span>` : ''}${v.candidate ? `<br>for ${esc(v.candidate)}` : ''}<br><span class="l3-who">${v.voters.map(esc).join(' · ')}</span></div>`).join('')}</div></div>`;
+    }
+    if (!(res.candidates || []).length && !info.demo && !(res.votes || []).length) s += '<p class="l3-dsub">no candidates, demographics or votes: vacant.</p>';
+    return s;
   }
   function closeState() { $('l3-detail').classList.remove('open'); }
 
