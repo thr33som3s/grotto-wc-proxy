@@ -1,0 +1,313 @@
+<style>
+#l3-page { --bg:#0a0a0a; --surface:#111; --surface2:#1a1a1a; --border:#2a2a2a; --text:#e8e8e8; --muted:#777; --accent:#c8a96e;
+  --red:#c0392b; --blue:#2e5fa8; --purple:#7d4a9e; --none:#202020; --off:#141414;
+  max-width:1200px; margin:0 auto; padding:48px 20px 80px; color:var(--text); background:var(--bg); text-transform:lowercase; font-size:16px; line-height:1.6 }
+#l3-page * { box-sizing:border-box }
+.l3-head { text-align:center; border-bottom:1px solid var(--border); padding-bottom:36px; margin-bottom:28px }
+.l3-presents { font-size:13px; letter-spacing:.3em; color:var(--muted) }
+.l3-title { font-size:48px; font-weight:300; letter-spacing:.06em; margin:10px 0 }
+.l3-intro { max-width:720px; margin:0 auto; color:#bbb; font-size:16px }
+.l3-schedule { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:3px; margin:24px auto 0; max-width:900px; font-size:13px }
+.l3-schedule div { background:var(--surface); border:1px solid var(--border); padding:10px 12px }
+.l3-schedule .now { border-color:var(--accent); color:var(--accent) }
+.l3-bar { display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:center; margin:22px 0 }
+.l3-switch { display:inline-flex; border:1px solid var(--border) }
+.l3-switch button { font:inherit; font-size:13px; letter-spacing:.12em; background:none; color:var(--muted); border:none; padding:8px 16px; cursor:pointer; text-transform:lowercase }
+.l3-switch button.on { background:var(--accent); color:#000 }
+.l3-previewbar { display:none; text-align:center; font-size:13px; letter-spacing:.1em; color:#000; background:var(--accent); padding:6px 10px; margin-bottom:6px }
+.l3-mapwrap { position:relative; background:var(--surface); border:1px solid var(--border); padding:16px }
+.l3-map svg { width:100%; height:auto; display:block }
+.l3-state { stroke:var(--bg); stroke-width:1; cursor:default; transition:opacity .15s }
+.l3-state.race { cursor:pointer }
+.l3-state.race:hover { opacity:.82 }
+.l3-state.match { stroke:var(--accent); stroke-width:2.5 }
+.l3-tilelabel { font-size:12px; fill:#fff; text-anchor:middle; pointer-events:none; letter-spacing:.04em }
+.l3-tilelabel.dim { fill:#444 }
+.l3-onart { font-size:11px; paint-order:stroke; stroke:#000; stroke-width:3px }
+.l3-detail { display:none; position:fixed; inset:0; z-index:9000; background:rgba(0,0,0,.9); overflow-y:auto }
+.l3-detail.open { display:block }
+.l3-detail-box { position:relative; max-width:760px; margin:40px auto; padding:24px 20px 40px; text-transform:lowercase }
+.l3-x { position:absolute; top:6px; right:10px; background:none; border:none; color:var(--muted); font-size:24px; cursor:pointer }
+.l3-big svg { width:100%; max-height:70vh; display:block }
+.l3-dname { font-size:34px; font-weight:300; letter-spacing:.06em; text-align:center; margin:10px 0 2px }
+.l3-dsub { text-align:center; color:var(--muted); font-size:13px; letter-spacing:.1em; margin-bottom:18px }
+.l3-dsec { margin-top:18px }
+.l3-dsec h4 { font-size:12px; letter-spacing:.25em; color:var(--accent); font-weight:400; margin:0 0 8px; border-bottom:1px solid var(--border); padding-bottom:4px }
+.l3-thumbs { display:flex; flex-wrap:wrap; gap:8px }
+.l3-thumb { width:92px; font-size:11px; line-height:1.35; color:#bbb }
+.l3-thumb img { width:92px; aspect-ratio:5/7; object-fit:cover; display:block; background:var(--surface2); margin-bottom:4px }
+.l3-tw { position:relative }
+.l3-badge { position:absolute; top:4px; right:4px; background:rgba(0,0,0,.85); border:1px solid var(--accent); color:var(--accent); font-size:12px; line-height:1; padding:3px 5px }
+.l3-dgroup { margin:10px 0 14px }
+.l3-dgh { font-size:13px; color:var(--text); margin-bottom:6px; letter-spacing:.06em }
+.l3-who { color:var(--accent) }
+.l3-thumb.won img { outline:2px solid var(--accent) }
+.l3-check { font-size:14px; fill:var(--accent); text-anchor:middle; pointer-events:none }
+.l3-tip { position:absolute; pointer-events:none; background:#000; border:1px solid var(--accent); padding:10px 12px; font-size:13px; max-width:280px; display:none; z-index:5 }
+.l3-tip strong { color:var(--accent); font-weight:400; font-size:15px }
+.l3-legend { display:flex; flex-wrap:wrap; gap:16px; justify-content:center; font-size:12px; color:var(--muted); margin-top:14px }
+.l3-legend span::before { content:""; display:inline-block; width:12px; height:12px; margin-right:6px; vertical-align:-1px; background:var(--c) }
+.l3-tally { text-align:center; margin-top:16px; font-size:14px; color:#bbb }
+.l3-foot { text-align:center; font-size:12px; color:var(--muted); margin-top:20px; letter-spacing:.1em }
+@media (max-width:700px) { .l3-title { font-size:34px } }
+</style>
+
+<div id="l3-page">
+  <div class="l3-head">
+    <div class="l3-presents">thr33som3s presents</div>
+    <div class="l3-title">2026 3l3ction</div>
+    <div class="l3-intro">thr33som3s turns his unique spotlight on the 2026 US midterm elections with his second ever 3l3ction 3v3nt. collectors run hand-painted candidates in the 35 senate races, dispatch demographics to support the races in each state, then vote with paintings from the archives. the whole piece wraps before the sun rises on election tuesday, a full 3l3ction result locked on chain.  do the thr33som3s collectors predict the US outcome, or do the twists and turns of his voting univ3rs3 reveal an alternate outcome?</div>
+    <div class="l3-schedule" id="l3-schedule"></div>
+  </div>
+
+  <div class="l3-bar">
+    <div class="l3-switch" id="l3-view">
+      <button data-view="grotto" class="on">grotto</button><button data-view="us">united states</button><button data-view="consensus">consensus</button>
+    </div>
+    <div class="l3-switch" id="l3-style">
+      <button data-style="geo" class="on">map</button><button data-style="tile">tiles</button>
+    </div>
+  </div>
+
+  <div class="l3-previewbar" id="l3-preview">preview · only you can see this. demographics are hidden from visitors until you say; this preview counts chris trueman as confirmed.</div>
+  <div class="l3-mapwrap"><div class="l3-map" id="l3-map">loading the map...</div><div class="l3-tip" id="l3-tip"></div></div>
+  <div class="l3-detail" id="l3-detail"><div class="l3-detail-box"><button class="l3-x" id="l3-x" aria-label="minimize">✕</button><div id="l3-detail-body"></div></div></div>
+  <div class="l3-legend" id="l3-legend"></div>
+  <div class="l3-tally" id="l3-tally"></div>
+  <div class="l3-foot" id="l3-foot"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script>
+(function () {
+  // Data comes from the proxy (races, schedule, US calls, contested ballots; Grotto results once tallied).
+  const API = 'https://grotto-wc-proxy.vercel.app/api/commit?phase=map';
+  const ATLAS = 'https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json';   // US Census-based state shapes, public domain
+  const REFRESH_MS = 60000;
+
+  const NAMES = { AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',CT:'Connecticut',DE:'Delaware',DC:'District of Columbia',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming' };
+  const BY_NAME = Object.fromEntries(Object.entries(NAMES).map(([k, v]) => [v, k]));
+  // Tile positions [column, row]: every state the same size, roughly where it sits on the map.
+  const TILES = { AK:[0,0],ME:[10,0],VT:[9,1],NH:[10,1],WA:[0,2],ID:[1,2],MT:[2,2],ND:[3,2],MN:[4,2],IL:[5,2],WI:[6,2],MI:[7,2],NY:[8,2],RI:[9,2],MA:[10,2],
+    OR:[0,3],NV:[1,3],WY:[2,3],SD:[3,3],IA:[4,3],IN:[5,3],OH:[6,3],PA:[7,3],NJ:[8,3],CT:[9,3],CA:[0,4],UT:[1,4],CO:[2,4],NE:[3,4],MO:[4,4],KY:[5,4],WV:[6,4],VA:[7,4],MD:[8,4],DE:[9,4],
+    AZ:[1,5],NM:[2,5],KS:[3,5],AR:[4,5],TN:[5,5],NC:[6,5],SC:[7,5],DC:[8,5],OK:[3,6],LA:[4,6],MS:[5,6],AL:[6,6],GA:[7,6],HI:[0,7],TX:[3,7],FL:[8,7] };
+
+  let data = null, atlas = null, view = 'grotto', style = 'geo';
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const COLOR = { red: 'var(--red)', blue: 'var(--blue)', purple: 'var(--purple)' };
+
+  // What each state shows in the current view.
+  function stateInfo(st) {
+    const race = data && data.races.includes(st);
+    if (!race) return { race: false };
+    const us = (data.us || {})[st] || {};
+    const g = (data.grotto || {})[st] || null;      // { color } once the Grotto results are tallied
+    const usColor = us.called ? us.color : '';
+    const gColor = g ? g.color : '';
+    return { race: true, us, g, usColor, gColor, match: !!(usColor && gColor && usColor === gColor), ballot: (data.ballots || {})[st] || null, demo: (data.demographics || {})[st] || null };
+  }
+  function fillFor(info) {
+    if (!info.race) return 'var(--off)';
+    if (view === 'us') return COLOR[info.usColor] || 'var(--none)';
+    if (view === 'grotto') return COLOR[info.gColor] || (info.demo && !info.ballot ? COLOR[info.demo.color] : '') || 'var(--none)';
+    // consensus: split, grotto on the left/top, united states on the right/bottom
+    const a = info.gColor || 'none', b = info.usColor || 'none';
+    return a === b && a !== 'none' ? COLOR[a] : `url(#l3-split-${a}-${b})`;
+  }
+  function defs() {
+    const cs = ['red', 'blue', 'purple', 'none'];
+    const stop = (c) => c === 'none' ? 'var(--none)' : COLOR[c];
+    return '<defs>' + cs.flatMap(a => cs.map(b => `<linearGradient id="l3-split-${a}-${b}" x1="0" y1="0" x2="1" y2="1"><stop offset="50%" stop-color="${stop(a)}"/><stop offset="50%" stop-color="${stop(b)}"/></linearGradient>`)).join('') + '</defs>';
+  }
+
+  // Grotto view: a race with candidates is filled with their paintings, clipped to the state's shape.
+  // Several different candidates split the state into equal vertical strips, one painting each.
+  const showPaintings = (info) => view === 'grotto' && info.ballot && (info.ballot.images || []).some(Boolean);
+  function paintings(st, info, clipShape, x0, y0, w, h) {
+    const imgs = info.ballot.images, n = imgs.length, sw = w / n;
+    return `<clipPath id="l3-clip-${st}">${clipShape}</clipPath><g clip-path="url(#l3-clip-${st})">`
+      + imgs.map((src, i) => src ? `<image href="${esc(src)}" x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" preserveAspectRatio="xMidYMid slice"></image>` : `<rect x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" fill="var(--none)"></rect>`).join('')
+      + (n > 1 ? imgs.slice(1).map((_, i) => `<line x1="${x0 + (i + 1) * sw}" y1="${y0}" x2="${x0 + (i + 1) * sw}" y2="${y0 + h}" stroke="var(--bg)" stroke-width="1.5"></line>`).join('') : '')
+      + '</g>';
+  }
+
+  function drawGeo() {
+    const path = d3.geoPath();
+    const states = topojson.feature(atlas, atlas.objects.states).features;
+    let svg = `<svg viewBox="0 0 975 610" role="img" aria-label="map of the 2026 senate races">${defs()}`;
+    for (const f of states) {
+      const st = BY_NAME[f.properties.name]; if (!st) continue;
+      const info = stateInfo(st), d = path(f);
+      if (showPaintings(info)) {
+        const [[x0, y0], [x1, y1]] = path.bounds(f);
+        svg += paintings(st, info, `<path d="${d}"></path>`, x0, y0, x1 - x0, y1 - y0);
+        svg += `<path class="l3-state race" data-st="${st}" d="${d}" fill="rgba(0,0,0,0)"></path>`;
+        continue;
+      }
+      svg += `<path class="l3-state${info.race ? ' race' : ''}${view === 'consensus' && info.match ? ' match' : ''}" data-st="${st}" d="${d}" fill="${fillFor(info)}"></path>`;
+      if (view === 'consensus' && info.match) { const [x, y] = path.centroid(f); svg += `<text class="l3-check" x="${x}" y="${y + 5}">✓</text>`; }
+      else if (info.ballot) { const [x, y] = path.centroid(f); svg += `<text class="l3-check" x="${x}" y="${y + 5}">★</text>`; }
+    }
+    $('l3-map').innerHTML = svg + '</svg>';
+  }
+  function drawTiles() {
+    const S = 58, G = 4;
+    let svg = `<svg viewBox="0 0 ${11 * (S + G)} ${8 * (S + G)}" role="img" aria-label="tile map of the 2026 senate races">${defs()}`;
+    for (const [st, [c, r]] of Object.entries(TILES)) {
+      const info = stateInfo(st), x = c * (S + G), y = r * (S + G);
+      if (showPaintings(info)) {
+        svg += paintings(st, info, `<rect x="${x}" y="${y}" width="${S}" height="${S}"></rect>`, x, y, S, S);
+        svg += `<rect class="l3-state race" data-st="${st}" x="${x}" y="${y}" width="${S}" height="${S}" fill="rgba(0,0,0,0)"></rect>`;
+        svg += `<text class="l3-tilelabel l3-onart" x="${x + S / 2}" y="${y + S - 6}">${st}</text>`;
+        continue;
+      }
+      svg += `<rect class="l3-state${info.race ? ' race' : ''}${view === 'consensus' && info.match ? ' match' : ''}" data-st="${st}" x="${x}" y="${y}" width="${S}" height="${S}" fill="${fillFor(info)}"></rect>`;
+      svg += `<text class="l3-tilelabel${info.race ? '' : ' dim'}" x="${x + S / 2}" y="${y + S / 2 + 4}">${st}</text>`;
+      if (view === 'consensus' && info.match) svg += `<text class="l3-check" x="${x + S - 9}" y="${y + 15}">✓</text>`;
+      if (info.ballot) svg += `<text class="l3-check" x="${x + 9}" y="${y + 15}">★</text>`;
+    }
+    $('l3-map').innerHTML = svg + '</svg>';
+  }
+  function draw() {
+    if (!data) return;
+    if (style === 'geo' && atlas && window.d3 && window.topojson) drawGeo(); else drawTiles();
+    legend(); tally(); bindTips();
+  }
+  function legend() {
+    const items = [['red', 'var(--red)'], ['blue', 'var(--blue)'], ['purple', 'var(--purple)'], [view === 'grotto' ? 'not yet decided' : 'not yet called', 'var(--none)'], ['no senate race', 'var(--off)']];
+    $('l3-legend').innerHTML = items.map(([t, c]) => `<span style="--c:${c}">${t}</span>`).join('') + (view === 'consensus' ? '<span style="--c:linear-gradient(135deg,var(--red) 50%,var(--blue) 50%)">grotto / united states</span>' : '');
+  }
+  function tally() {
+    const rs = data.races.map(stateInfo);
+    const called = rs.filter(i => i.usColor).length, decided = rs.filter(i => i.gColor).length, matches = rs.filter(i => i.match).length;
+    const cand = data.ballots ? `${Object.keys(data.ballots).length} races have candidates (★) · ` : data.candidateCount != null ? `${data.candidateCount} candidates are running. where they run is revealed when demographics entries close · ` : '';
+    $('l3-tally').textContent = cand + (view === 'us' ? `${called} of ${data.races.length} races called`
+      : view === 'grotto' ? (decided ? `${decided} of ${data.races.length} grotto races decided` : 'grotto results are revealed after voting confirmations close, mon nov 2')
+      : `consensus: ${matches} of ${called} called races match the grotto`);
+  }
+  function bindTips() {
+    const tip = $('l3-tip'), wrap = tip.parentElement;
+    document.querySelectorAll('#l3-map .l3-state.race').forEach(el => {
+      el.addEventListener('mousemove', (e) => {
+        const st = el.dataset.st, info = stateInfo(st), r = wrap.getBoundingClientRect();
+        const us = info.us.called ? `${esc(info.us.winner || info.us.party)} (${esc(info.usColor)})` : 'not yet called';
+        const g = info.g ? esc(info.gColor) : 'not yet decided';
+        tip.innerHTML = `<strong>${esc(NAMES[st])}</strong><br>united states: ${us}<br>grotto: ${g}`
+          + (info.ballot ? `<br>${info.ballot.contested ? 'contested · ' : ''}candidate${info.ballot.candidates.length > 1 ? 's' : ''}: ${info.ballot.candidates.map(esc).join(' · ')}${info.ballot.runs > info.ballot.candidates.length ? ` (${info.ballot.runs} runs)` : ''}`
+            : data.ballots ? '<br>no candidate: no voting here' : '')
+          + (info.demo ? `<br>demographics: red ${info.demo.red} · blue ${info.demo.blue}` : '')
+          + (view === 'consensus' && info.match ? '<br>✓ consensus' : '');
+        tip.style.display = 'block';
+        tip.style.left = Math.min(e.clientX - r.left + 14, r.width - 290) + 'px';
+        tip.style.top = (e.clientY - r.top + 14) + 'px';
+      });
+      el.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+      el.addEventListener('click', () => openState(el.dataset.st));
+    });
+  }
+  // ── State detail: click a race state to see it alone, large, in its own outline ──
+  // During the 3l3ction: every active candidate. After the close (data.results): the winner's painting, or the
+  // race color where there is no winner, plus every candidate, demographic and vote in the state as thumbnails.
+  function bigShape(st) {
+    const W = 600, H = 600, pad = 14;
+    if (atlas && window.d3 && window.topojson) {
+      const f = topojson.feature(atlas, atlas.objects.states).features.find(x => BY_NAME[x.properties.name] === st);
+      if (f) {
+        const path = d3.geoPath(d3.geoIdentity().fitExtent([[pad, pad], [W - pad, H - pad]], f));
+        const [[x0, y0], [x1, y1]] = path.bounds(f);
+        return { d: path(f), x0, y0, w: x1 - x0, h: y1 - y0, W, H, el: (fill) => `<path d="${path(f)}" fill="${fill}" stroke="var(--accent)" stroke-width="1.5"></path>`, clip: `<path d="${path(f)}"></path>` };
+      }
+    }
+    const s = W - 2 * pad;
+    return { x0: pad, y0: pad, w: s, h: s, W, H, el: (fill) => `<rect x="${pad}" y="${pad}" width="${s}" height="${s}" fill="${fill}" stroke="var(--accent)" stroke-width="1.5"></rect>`, clip: `<rect x="${pad}" y="${pad}" width="${s}" height="${s}"></rect>` };
+  }
+  function bigFill(st, sh, images) {
+    const n = images.length, sw = sh.w / n;
+    return `<clipPath id="l3-bigclip-${st}">${sh.clip}</clipPath><g clip-path="url(#l3-bigclip-${st})">`
+      + images.map((src, i) => src ? `<image href="${esc(src)}" x="${sh.x0 + i * sw}" y="${sh.y0}" width="${sw}" height="${sh.h}" preserveAspectRatio="xMidYMid slice"></image>` : '').join('')
+      + images.slice(1).map((_, i) => `<line x1="${sh.x0 + (i + 1) * sw}" y1="${sh.y0}" x2="${sh.x0 + (i + 1) * sw}" y2="${sh.y0 + sh.h}" stroke="var(--bg)" stroke-width="3"></line>`).join('')
+      + '</g>' + sh.el('none');
+  }
+  const thumb = (img, lines, won) => `<div class="l3-thumb${won ? ' won' : ''}">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : '<img alt="">'}${lines.filter(Boolean).map(esc).join('<br>')}</div>`;
+  function openState(st) {
+    const info = stateInfo(st), res = (data.results || {})[st] || null, sh = bigShape(st);
+    let art;
+    if (res && res.winner && res.winner.image) art = bigFill(st, sh, [res.winner.image]);
+    else if (res) art = sh.el(COLOR[res.color] || 'var(--none)');
+    else if (info.ballot && (info.ballot.images || []).some(Boolean)) art = bigFill(st, sh, info.ballot.images);
+    else art = sh.el(fillFor(info).startsWith('url(') ? 'var(--none)' : fillFor(info));
+    const us = info.us.called ? `${esc(info.us.winner || info.us.party)} (${esc(info.usColor)})` : 'not yet called';
+    let html = `<div class="l3-big"><svg viewBox="0 0 ${sh.W} ${sh.H}">${art}</svg></div>
+      <div class="l3-dname">${esc(NAMES[st])}</div>
+      <div class="l3-dsub">united states: ${us} · grotto: ${res ? (res.color ? esc(res.color) : 'vacant') : 'not yet decided'}${res && res.consensus ? ' · ✓ consensus' : ''}</div>`;
+    if (res) {
+      if ((res.candidates || []).length) html += `<div class="l3-dsec"><h4>candidates</h4><div class="l3-thumbs">${res.candidates.map(c => thumb(c.image, [c.name, c.collector ? 'run by ' + c.collector : '', c.won ? 'winner' : ''], c.won)).join('')}</div></div>`;
+      if ((res.demographics || []).length) html += `<div class="l3-dsec"><h4>demographics</h4><div class="l3-thumbs">${res.demographics.map(d => thumb(d.image, [d.team + ' · ' + d.color, d.kind ? d.kind : '', d.collector])).join('')}</div></div>`;
+      if ((res.votes || []).length) html += `<div class="l3-dsec"><h4>votes</h4><div class="l3-thumbs">${res.votes.map(v => thumb(v.image, [`${v.color}${v.declared ? ' → ' + v.declared : ''} ×${v.multiplier}`, v.candidate ? 'for ' + v.candidate : '', v.collector])).join('')}</div></div>`;
+      if (!(res.candidates || []).length && !(res.demographics || []).length && !(res.votes || []).length) html += '<p class="l3-dsub">no candidates, demographics or votes: vacant.</p>';
+    }
+    if (!res && info.ballot) {
+      html += `<div class="l3-dsec"><h4>${info.ballot.contested ? 'contested · ' : ''}candidates</h4><div class="l3-thumbs">${info.ballot.candidates.map((n, i) => thumb((info.ballot.images || [])[i], [n])).join('')}</div>
+        ${info.ballot.runs > info.ballot.candidates.length ? `<p class="l3-dsub" style="text-align:left;margin-top:8px">${info.ballot.runs} runs. who ran them is revealed with the results.</p>` : ''}</div>`;
+    } else if (!res && data.ballots && !info.demo) {
+      html += '<p class="l3-dsub">no candidate: no voting here. demographics placed here still set its color, revealed with the results.</p>';
+    } else if (!res && data.ballots) {
+      html += '<p class="l3-dsub">no candidate: no voting here. its demographics set its color.</p>';
+    } else if (!res) {
+      html += '<p class="l3-dsub">candidates are revealed when demographics entries close.</p>';
+    }
+    if (!res && info.demo) html += demoSection(info.demo);
+    $('l3-detail-body').innerHTML = html;
+    $('l3-detail').classList.add('open');
+    $('l3-tip').style.display = 'none';
+  }
+  // Demographics in a state: totals, then one line per demographic and color, each card once with a ×N badge
+  // when the same card was placed more than once, and who placed it.
+  function demoSection(dm) {
+    return `<div class="l3-dsec"><h4>demographics · red ${dm.red} · blue ${dm.blue} · ${esc(dm.color)}</h4>`
+      + dm.groups.map(g => `<div class="l3-dgroup"><div class="l3-dgh">${esc(g.team)} · ${esc(g.color)}${g.count > 1 ? ' · ×' + g.count : ''}</div><div class="l3-thumbs">`
+        + g.cards.map(c => `<div class="l3-thumb"><div class="l3-tw">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : '<img alt="">'}${c.count > 1 ? `<span class="l3-badge">×${c.count}</span>` : ''}</div>${esc(c.name)}<br><span class="l3-who">${c.collectors.map(esc).join(' · ')}</span></div>`).join('')
+        + '</div></div>').join('') + '</div>';
+  }
+  function closeState() { $('l3-detail').classList.remove('open'); }
+
+  function schedule() {
+    const s = data.schedule, now = Date.now();
+    const fmt = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).toLowerCase();
+    $('l3-schedule').innerHTML = ['candidacy', 'demographics', 'voting'].map(p => {
+      const w = s[p], live = now >= Date.parse(w.commitOpens) && now <= Date.parse(w.confirmCloses);
+      return `<div class="${live ? 'now' : ''}"><strong>${p}</strong><br>entries ${fmt(w.commitOpens)} – ${fmt(w.commitCloses)}<br>confirmations ${fmt(w.confirmOpens)} – ${fmt(w.confirmCloses)}</div>`;
+    }).join('');
+  }
+  async function load() {
+    try {
+      let session = null;
+      try { const s = JSON.parse(localStorage.getItem('c3_session') || 'null'); if (s && s.token && s.exp > Date.now()) session = s; } catch (e) {}
+      const r = await fetch(session ? API + '&preview=1' : API, session ? { headers: { Authorization: 'Bearer ' + session.token }, cache: 'no-store' } : {});
+      const d = await r.json();
+      if (!d || !Array.isArray(d.races)) throw new Error(d && d.error ? d.error : 'no race data');
+      d.races = d.races.map(x => Array.isArray(x) ? x[0] : x);
+      data = d;
+      $('l3-preview').style.display = d.preview ? 'block' : 'none';
+      schedule(); draw();
+      $('l3-foot').textContent = 'updated ' + new Date(data.generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
+    } catch (e) {
+      console.warn('3l3ction map:', e);
+      if (!data) $('l3-map').textContent = "the map couldn't load just now. refresh to try again.";
+    }
+  }
+  $('l3-x').onclick = closeState;
+  $('l3-detail').addEventListener('click', (e) => { if (e.target.id === 'l3-detail') closeState(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeState(); });
+  document.querySelectorAll('#l3-view button').forEach(b => b.onclick = () => { view = b.dataset.view; document.querySelectorAll('#l3-view button').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+  document.querySelectorAll('#l3-style button').forEach(b => b.onclick = () => { style = b.dataset.style; document.querySelectorAll('#l3-style button').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+  fetch(ATLAS).then(r => r.json()).then(a => { atlas = a; draw(); }).catch((e) => { console.warn('3l3ction map: state shapes', e); style = 'tile'; draw(); });
+  // the map libraries load separately; redraw once they're in
+  let tries = 0;
+  const libs = setInterval(() => { if ((window.d3 && window.topojson) || ++tries > 40) { clearInterval(libs); draw(); } }, 250);
+  load();
+  setInterval(load, REFRESH_MS);
+})();
+</script>
