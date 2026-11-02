@@ -25,11 +25,24 @@ export const EXTENSIONS = {
   },
 };
 
+// Per-wallet extensions of a phase's confirmation window, granted by thr33s.
+export const CONFIRM_EXTENSIONS = {
+  demographics: {
+    // missed Saturday's burns; may confirm until Mon Nov 2, 11:59pm EST (thr33s)
+    "0x35cd6404a0ae7d84bf7dabc3681af9aadca10457": "2026-11-03T04:59:59Z", // chris trueman
+    "0xb01537fc6256ada474bae2e26d0f5ffde559f62f": "2026-11-03T04:59:59Z", // NezTheGreat
+    "0x37d0c5c8c7ade23cb5e32f5a6ceb136f639b1913": "2026-11-03T04:59:59Z", // SuboshiNakasoto
+  },
+};
+
 export function windowState(phase, now = Date.now(), wallet = null) {
   const base = PHASES[phase];
   if (!base) return null;
-  const ext = wallet && EXTENSIONS[phase] && EXTENSIONS[phase][String(wallet).toLowerCase()];
-  const p = ext ? { ...base, commitCloses: ext, extended: true } : base;
+  const w = wallet && String(wallet).toLowerCase();
+  const ext = w && EXTENSIONS[phase] && EXTENSIONS[phase][w];
+  const cext = w && CONFIRM_EXTENSIONS[phase] && CONFIRM_EXTENSIONS[phase][w];
+  let p = ext ? { ...base, commitCloses: ext, extended: true } : base;
+  if (cext) p = { ...p, confirmCloses: cext, confirmExtended: true };
   const t = (s) => Date.parse(s);
   const commitOpen = TEST_MODE || (now >= t(p.commitOpens) && now <= t(p.commitCloses));
   const confirmOpen = TEST_MODE || (now >= t(p.confirmOpens) && now <= t(p.confirmCloses));
