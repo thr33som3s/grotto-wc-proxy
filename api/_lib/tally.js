@@ -1,4 +1,4 @@
-// 2026 3l3ction tally engine — implements 2026_3l3ction_rules_v13.md
+// 2026 3l3ction tally engine — implements 2026_3l3ction_rules_v18.md
 // Pure functions, no dependencies. Same input (including seed) => same output.
 // Input comes from the WalletConnect path or the fallback forms; both feed this.
 //
@@ -274,7 +274,8 @@ export function tally(input) {
         const byPlacement = tied.filter((n) => firstPlacement[n] !== undefined).sort((a, b) => firstPlacement[a] - firstPlacement[b]);
         winner = byVote.length ? byVote[0] : byPlacement[0];
         decidedByTimestamp = true;
-        color = "purple"; // §5.2: decided by timestamp => purple, all votes burned
+        // Rules v18 §5.2: the first vote (or placement) picks the winning candidate; the race keeps the color
+        // its red and blue totals set. Only a red/blue tie makes a race purple (§5.1).
       }
     } else if (hasCandidate && !vacant) {
       winner = names[0]; // lone candidate: any vote or any placement = full payout
