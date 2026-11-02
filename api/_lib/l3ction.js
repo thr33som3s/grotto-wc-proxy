@@ -418,7 +418,7 @@ export function demographicsReveal(entries, transfers, tokens, now = Date.now(),
   }
   return { races, status };
 }
-export const DEMOGRAPHICS_REVEALED = false;   // flipped by thr33s's word, once every demographics entry is final
+export const DEMOGRAPHICS_REVEALED = true;    // revealed by thr33s, Nov 2, once every demographics entry was final
 
 // ── Home county votes (thr33s, Nov 2) ────────────────────────────
 // A 2024 Voter cast in a race in the state of its own county counts twice (×2 instead of ×1), toward the race
