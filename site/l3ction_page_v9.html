@@ -125,10 +125,15 @@
   // Grotto view: a race with candidates is filled with their paintings, clipped to the state's shape.
   // Several different candidates split the state into equal vertical strips, one painting each.
   const showPaintings = (info) => view === 'grotto' && info.ballot && (info.ballot.images || []).some(Boolean);
+  // The color a race's demographics set, laid over its candidate paintings as a translucent wash.
+  const TINT_OPACITY = 0.42;
+  const tintRect = (info, x0, y0, w, h) => info.demo && COLOR[info.demo.color]
+    ? `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="${COLOR[info.demo.color]}" fill-opacity="${TINT_OPACITY}"></rect>` : '';
   function paintings(st, info, clipShape, x0, y0, w, h) {
     const imgs = info.ballot.images, n = imgs.length, sw = w / n;
     return `<clipPath id="l3-clip-${st}">${clipShape}</clipPath><g clip-path="url(#l3-clip-${st})">`
       + imgs.map((src, i) => src ? `<image href="${esc(src)}" x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" preserveAspectRatio="xMidYMid slice"></image>` : `<rect x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" fill="var(--none)"></rect>`).join('')
+      + tintRect(info, x0, y0, w, h)
       + (n > 1 ? imgs.slice(1).map((_, i) => `<line x1="${x0 + (i + 1) * sw}" y1="${y0}" x2="${x0 + (i + 1) * sw}" y2="${y0 + h}" stroke="var(--bg)" stroke-width="1.5"></line>`).join('') : '')
       + '</g>';
   }
@@ -223,10 +228,11 @@
     const s = W - 2 * pad;
     return { x0: pad, y0: pad, w: s, h: s, W, H, el: (fill) => `<rect x="${pad}" y="${pad}" width="${s}" height="${s}" fill="${fill}" stroke="var(--accent)" stroke-width="1.5"></rect>`, clip: `<rect x="${pad}" y="${pad}" width="${s}" height="${s}"></rect>` };
   }
-  function bigFill(st, sh, images) {
+  function bigFill(st, sh, images, tint) {
     const n = images.length, sw = sh.w / n;
     return `<clipPath id="l3-bigclip-${st}">${sh.clip}</clipPath><g clip-path="url(#l3-bigclip-${st})">`
       + images.map((src, i) => src ? `<image href="${esc(src)}" x="${sh.x0 + i * sw}" y="${sh.y0}" width="${sw}" height="${sh.h}" preserveAspectRatio="xMidYMid slice"></image>` : '').join('')
+      + (tint && COLOR[tint] ? `<rect x="${sh.x0}" y="${sh.y0}" width="${sh.w}" height="${sh.h}" fill="${COLOR[tint]}" fill-opacity="${TINT_OPACITY}"></rect>` : '')
       + images.slice(1).map((_, i) => `<line x1="${sh.x0 + (i + 1) * sw}" y1="${sh.y0}" x2="${sh.x0 + (i + 1) * sw}" y2="${sh.y0 + sh.h}" stroke="var(--bg)" stroke-width="3"></line>`).join('')
       + '</g>' + sh.el('none');
   }
@@ -236,7 +242,7 @@
     let art;
     if (res && res.winner && res.winner.image) art = bigFill(st, sh, [res.winner.image]);
     else if (res) art = sh.el(COLOR[res.color] || 'var(--none)');
-    else if (info.ballot && (info.ballot.images || []).some(Boolean)) art = bigFill(st, sh, info.ballot.images);
+    else if (info.ballot && (info.ballot.images || []).some(Boolean)) art = bigFill(st, sh, info.ballot.images, info.demo && info.demo.color);
     else art = sh.el(fillFor(info).startsWith('url(') ? 'var(--none)' : fillFor(info));
     const us = info.us.called ? `${esc(info.us.winner || info.us.party)} (${esc(info.usColor)})` : 'not yet called';
     let html = `<div class="l3-big"><svg viewBox="0 0 ${sh.W} ${sh.H}">${art}</svg></div>
