@@ -97,7 +97,12 @@ async function map(res, KEY, wallet) {
     if (preview || now > Date.parse(PHASES.demographics.commitCloses)) out.ballots = cr.races;
     // Demographics: hidden until thr33s says; his preview counts chris trueman as confirmed (Nov 2).
     if (preview || DEMOGRAPHICS_REVEALED) {
-      const [{ commitments: demos = [] }, bulk] = await Promise.all([store("list_commitments", { phase: storedPhase("demographics") }), collectionTokens(KEY, "bulk").catch(() => [])]);
+      const [{ commitments: demos = [] }, bulk, { profiles = [] }] = await Promise.all([store("list_commitments", { phase: storedPhase("demographics") }), collectionTokens(KEY, "bulk").catch(() => []), store("list_profiles", {})]);
+      // The store's entry list carries no usernames; attach each collector's from their profile.
+      const userOf = new Map(profiles.map((p) => [String(p.wallet).toLowerCase(), p.username]));
+      const named = (list) => list.map((e) => ({ ...e, username: e.username || userOf.get(String(e.wallet).toLowerCase()) || "" }));
+      demos.splice(0, demos.length, ...named(demos));
+      commitments.splice(0, commitments.length, ...named(commitments));
       const tokens = new Map([...univ, ...bulk].map((t) => [t.key, t]));
       const assume = preview && !DEMOGRAPHICS_REVEALED ? new Set(["0x35cd6404a0ae7d84bf7dabc3681af9aadca10457"]) : new Set();
       const rv = demographicsReveal(demos, transfers, tokens, now, assume);
@@ -105,7 +110,7 @@ async function map(res, KEY, wallet) {
       if (preview) out.demographicsStatus = rv.status;
       // Results: thr33s's preview only (preliminary: pending voting entries counted), until he says.
       if (preview || RESULTS_REVEALED) {
-        const { commitments: votes = [] } = await store("list_commitments", { phase: storedPhase("voting") });
+        const votes = named((await store("list_commitments", { phase: storedPhase("voting") })).commitments || []);
         const colls = [...new Set(votes.flatMap((e) => (e.payload?.votes || []).map((v) => String(v.token).split(":")[0])))].filter((c) => c !== "univ3rs3" && c !== "bulk");
         const extra = (await Promise.all(colls.map((c) => collectionTokens(KEY, c).catch(() => [])))).flat();
         const all = new Map([...tokens, ...extra.map((t) => [t.key, t])]);
