@@ -6,10 +6,11 @@
 // Demographics: { demographics: [{ kind: free|added|straddle, card?, team?, color, tiers, races }], inserts: [{ key, qty }] }
 import { store } from "./_lib/store.js";
 import { readHoldings, readTransfers, readUsResults } from "./_lib/ledger.js";
+import { tally } from "./_lib/tally.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
   univ3rs3Tokens, collectionTokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, candidateRaces, shortName,
-  candidacyIndex, demographicsIndex, demographicsReveal, DEMOGRAPHICS_REVEALED, votingToken, checkVotes, votingMessage, votingItems, votingIndex } from "./_lib/l3ction.js";
+  candidacyIndex, demographicsIndex, demographicsReveal, DEMOGRAPHICS_REVEALED, tallyInput, mapResults, RESULTS_REVEALED, votingToken, checkVotes, votingMessage, votingItems, votingIndex } from "./_lib/l3ction.js";
 
 const SIGN_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -102,6 +103,19 @@ async function map(res, KEY, wallet) {
       const rv = demographicsReveal(demos, transfers, tokens, now, assume);
       out.demographics = rv.races;
       if (preview) out.demographicsStatus = rv.status;
+      // Results: thr33s's preview only (preliminary: pending voting entries counted), until he says.
+      if (preview || RESULTS_REVEALED) {
+        const { commitments: votes = [] } = await store("list_commitments", { phase: storedPhase("voting") });
+        const colls = [...new Set(votes.flatMap((e) => (e.payload?.votes || []).map((v) => String(v.token).split(":")[0])))].filter((c) => c !== "univ3rs3" && c !== "bulk");
+        const extra = (await Promise.all(colls.map((c) => collectionTokens(KEY, c).catch(() => [])))).flat();
+        const all = new Map([...tokens, ...extra.map((t) => [t.key, t])]);
+        const usCalls = Object.fromEntries(Object.entries(out.us || {}).filter(([, u]) => u.called).map(([r, u]) => [r, u.color]));
+        const { input, status } = tallyInput({ candidacy: commitments, demographics: demos, voting: votes }, transfers, all, usCalls, now, preview && !RESULTS_REVEALED);
+        const t = tally(input);
+        out.results = mapResults(t, input, all);
+        out.grotto = Object.fromEntries(Object.entries(out.results).map(([r, x]) => [r, { color: x.color }]));
+        if (preview) { out.votingStatus = status.voting; out.tallyErrors = t.errors; out.prize = t.prize; out.rulings = t.rulings; }
+      }
     }
   }
   return res.status(200).json(out);

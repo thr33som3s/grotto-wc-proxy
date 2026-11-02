@@ -530,3 +530,67 @@ export function voteWeight(vote, vt) {
   const home = VOTER_HOME[vote.token];
   return vt && vt.kind === "voter" && home && home[1] === vote.race ? vt.mult * 2 : (vt ? vt.mult : 0);
 }
+
+// ── Results (rules §5–§7), from confirmed entries only ───────────
+// Builds the tally engine's input: burned candidacies, confirmed demographics (or the free demographic alone
+// where an entry was not confirmed in time), and confirmed votes, each vote weighted (home county Voters ×2).
+// Votes in an entry whose tokens have not all reached 3vault are left out (pending, or void after the deadline).
+// includePending: count voting entries still waiting on their burns (thr33s's preliminary preview).
+export function tallyInput({ candidacy = [], demographics = [], voting = [] }, transfers, tokens, usResults = {}, now = Date.now(), includePending = false) {
+  const names = (k) => shortName(tokens.get(k)?.name || k);
+  const who = (e) => e.username || String(e.wallet).slice(0, 6);
+  const ts = (e) => Date.parse(e.submitted_at) || 0;
+  const input = { races: RACES.map(([c]) => c), candidacies: [], demographics: [], votes: [], usResults, seed: "2026-3l3ction" };
+  const status = { voting: {} };
+  const cwin = windowState("candidacy", now);
+  for (const e of candidacy) {
+    const burned = candidacyBurns(e, String(e.wallet).toLowerCase(), transfers, cwin);
+    (e.payload?.entries || []).forEach((x, i) => { if (burned[x.candidate]) input.candidacies.push({ id: `c:${who(e)}:${i}`, collector: who(e), candidate: names(x.candidate), race: x.race, token: x.candidate }); });
+  }
+  for (const e of demographics) {
+    const wallet = String(e.wallet).toLowerCase(), win = windowState("demographics", now, wallet);
+    const [from, to] = confirmSpan(e, win);
+    const ok = Object.values(sentTo(demographicsItems(e.payload), wallet, transfers, from, to)).every((s) => s.sent >= s.qty);
+    const closed = now > Date.parse(win.confirmCloses);
+    (e.payload?.demographics || []).forEach((d, i) => {
+      if (ok) input.demographics.push({ id: `d:${who(e)}:${i}`, collector: who(e), team: d.team, color: d.color, kind: d.kind, tiers: d.tiers, placements: d.races, timestamp: ts(e) });
+      else if (closed && d.kind === "free") input.demographics.push({ id: `d:${who(e)}:${i}`, collector: who(e), team: d.team, color: d.color, kind: "free", tiers: 1, placements: d.races.slice(0, 5), timestamp: ts(e) });
+    });
+  }
+  for (const e of voting) {
+    const wallet = String(e.wallet).toLowerCase(), win = windowState("voting", now, wallet);
+    const [from, to] = confirmSpan(e, win);
+    const ok = Object.values(sentTo(votingItems(e.payload), wallet, transfers, from, to)).every((s) => s.sent >= s.qty);
+    const st = ok ? "confirmed" : now > Date.parse(win.confirmCloses) ? "void" : "pending";
+    status.voting[who(e)] = st;
+    if (!ok && !(includePending && st === "pending")) continue;
+    (e.payload?.votes || []).forEach((v, i) => {
+      const vt = votingToken(tokens.get(v.token)); if (!vt) return;
+      input.votes.push({ id: `v:${who(e)}:${i}`, collector: who(e), race: v.race, candidate: v.candidate, declared: v.declared, timestamp: ts(e),
+        token: { id: v.token, color: vt.color, multiplier: voteWeight(v, vt), kind: vt.kind }, home: voteWeight(v, vt) > vt.mult, pending: !ok });
+    });
+  }
+  return { input, status };
+}
+export const RESULTS_REVEALED = false;   // thr33s's preview only, until he says
+
+// Per-race results for the map: race color and totals, the winner, every candidate (with who ran it), and every
+// vote (token, color, declared, weight, home county, candidate, collector, pending). Demographics come from the
+// demographics reveal.
+export function mapResults(tallyOut, input, tokens) {
+  const out = {};
+  const img = (k) => tokens.get(k)?.image || "";
+  for (const r of tallyOut.races) {
+    const cands = input.candidacies.filter((c) => c.race === r.race);
+    const winnerCand = r.winner ? cands.find((c) => c.candidate === r.winner) : null;
+    out[r.race] = {
+      color: r.color, status: r.status, red: r.red, blue: r.blue, placementRed: r.placementRed, placementBlue: r.placementBlue, voteRed: r.voteRed, voteBlue: r.voteBlue,
+      contested: r.contested, decidedByTimestamp: r.decidedByTimestamp, candidateVotes: r.candidateVotes, consensus: r.consensus, usResult: r.usResult,
+      winner: r.winner ? { name: r.winner, image: winnerCand ? img(winnerCand.token) : "" } : null,
+      candidates: cands.map((c) => ({ name: c.candidate, image: img(c.token), collector: c.collector, won: c.candidate === r.winner })),
+      votes: input.votes.filter((v) => v.race === r.race).map((v) => ({ token: v.token.id, name: tokens.get(v.token.id)?.name || v.token.id, image: img(v.token.id),
+        color: v.token.color, declared: v.declared || "", multiplier: v.token.multiplier, home: !!v.home, candidate: v.candidate || "", collector: v.collector, pending: !!v.pending })),
+    };
+  }
+  return out;
+}
