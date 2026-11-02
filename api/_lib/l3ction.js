@@ -473,7 +473,7 @@ export const VOTER_HOME = {
   "bulk:2024049": ["Walker", "TX"],
   "bulk:2024050": ["Harris", "TX"],
   "bulk:2024051": ["Harris", "TX"],
-  "bulk:2024052": ["Harrison", "AL"],
+  "bulk:2024052": ["Mobile", "AL"],   // Lana Caldwell: Mobile, AL (thr33s; sheet corrected from Harrison)
   "bulk:2024053": ["Walker", "TX"],
   "bulk:2024054": ["Bibb", "GA"],
   "bulk:2024055": ["Cobb", "GA"],
