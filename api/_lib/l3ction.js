@@ -392,7 +392,7 @@ export function demographicsReveal(entries, transfers, tokens, now = Date.now(),
     g.count++;
     const key = d.card || `straddle:${d.team}`;
     let c = g.cards.find((x) => x.key === key);
-    if (!c) g.cards.push(c = { key, name: d.card ? (tokens.get(d.card)?.name || d.card) : `${d.team} (straddle)`, image: d.card ? (tokens.get(d.card)?.image || "") : "", kind: d.kind, count: 0, collectors: [] });
+    if (!c) g.cards.push(c = { key, name: d.card ? (tokens.get(d.card)?.name || d.card) : `${d.team} (straddle)`, image: d.card ? (tokens.get(d.card)?.image || "") : "", kind: d.kind, straddle: d.kind === "straddle", count: 0, collectors: [] });
     c.count++; c.collectors.push(collector);
   };
   const status = {};
@@ -404,7 +404,10 @@ export function demographicsReveal(entries, transfers, tokens, now = Date.now(),
     const confirmed = assume.has(wallet) || Object.values(sent).every((s) => s.sent >= s.qty);
     const closed = now > Date.parse(win.confirmCloses);
     status[who] = confirmed ? "confirmed" : closed ? "free demographic only" : "not yet confirmed";
-    for (const d of e.payload.demographics || []) {
+    for (const d0 of e.payload.demographics || []) {
+      // A straddle has no card of its own: it shows the collector's card for that team (thr33s, Nov 2).
+      const base = d0.kind === "straddle" ? (e.payload.demographics || []).find((x) => x.kind !== "straddle" && x.team === d0.team) : null;
+      const d = base ? { ...d0, card: base.card } : d0;
       if (confirmed) { for (const race of d.races) add(race, d, who); continue; }
       if (closed && d.kind === "free") for (const race of d.races.slice(0, 5)) add(race, d, who);
     }
