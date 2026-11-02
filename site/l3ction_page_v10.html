@@ -119,21 +119,28 @@
   function defs() {
     const cs = ['red', 'blue', 'purple', 'none'];
     const stop = (c) => c === 'none' ? 'var(--none)' : COLOR[c];
-    return '<defs>' + cs.flatMap(a => cs.map(b => `<linearGradient id="l3-split-${a}-${b}" x1="0" y1="0" x2="1" y2="1"><stop offset="50%" stop-color="${stop(a)}"/><stop offset="50%" stop-color="${stop(b)}"/></linearGradient>`)).join('') + '</defs>';
+    return '<defs>' + monoFilters() + cs.flatMap(a => cs.map(b => `<linearGradient id="l3-split-${a}-${b}" x1="0" y1="0" x2="1" y2="1"><stop offset="50%" stop-color="${stop(a)}"/><stop offset="50%" stop-color="${stop(b)}"/></linearGradient>`)).join('') + '</defs>';
   }
 
   // Grotto view: a race with candidates is filled with their paintings, clipped to the state's shape.
   // Several different candidates split the state into equal vertical strips, one painting each.
   const showPaintings = (info) => view === 'grotto' && info.ballot && (info.ballot.images || []).some(Boolean);
   // The color a race's demographics set, laid over its candidate paintings as a translucent wash.
-  const TINT_OPACITY = 0.42;
-  const tintRect = (info, x0, y0, w, h) => info.demo && COLOR[info.demo.color]
-    ? `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="${COLOR[info.demo.color]}" fill-opacity="${TINT_OPACITY}"></rect>` : '';
+  // Each painting is redrawn in one color: its brightness kept, mapped from a deep shade of the race color
+  // (shadows) to a light tint of it (highlights), like a duotone print. None of the painting's own color remains.
+  const MONO_BASE = { red: [0.753, 0.224, 0.169], blue: [0.180, 0.373, 0.659], purple: [0.490, 0.290, 0.620] };
+  function monoFilters() {
+    return Object.entries(MONO_BASE).map(([name, c]) => {
+      const sh = c.map(v => v * 0.18), hi = c.map(v => v + (1 - v) * 0.4);
+      const row = (i) => { const d = hi[i] - sh[i]; return `${(0.2126 * d).toFixed(4)} ${(0.7152 * d).toFixed(4)} ${(0.0722 * d).toFixed(4)} 0 ${sh[i].toFixed(4)}`; };
+      return `<filter id="l3-mono-${name}" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="${row(0)} ${row(1)} ${row(2)} 0 0 0 1 0"></feColorMatrix></filter>`;
+    }).join('');
+  }
+  const monoAttr = (color) => MONO_BASE[color] ? ` filter="url(#l3-mono-${color})"` : '';
   function paintings(st, info, clipShape, x0, y0, w, h) {
     const imgs = info.ballot.images, n = imgs.length, sw = w / n;
     return `<clipPath id="l3-clip-${st}">${clipShape}</clipPath><g clip-path="url(#l3-clip-${st})">`
-      + imgs.map((src, i) => src ? `<image href="${esc(src)}" x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" preserveAspectRatio="xMidYMid slice"></image>` : `<rect x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" fill="var(--none)"></rect>`).join('')
-      + tintRect(info, x0, y0, w, h)
+      + imgs.map((src, i) => src ? `<image href="${esc(src)}" x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" preserveAspectRatio="xMidYMid slice"${monoAttr(info.demo && info.demo.color)}></image>` : `<rect x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" fill="var(--none)"></rect>`).join('')
       + (n > 1 ? imgs.slice(1).map((_, i) => `<line x1="${x0 + (i + 1) * sw}" y1="${y0}" x2="${x0 + (i + 1) * sw}" y2="${y0 + h}" stroke="var(--bg)" stroke-width="1.5"></line>`).join('') : '')
       + '</g>';
   }
@@ -231,8 +238,7 @@
   function bigFill(st, sh, images, tint) {
     const n = images.length, sw = sh.w / n;
     return `<clipPath id="l3-bigclip-${st}">${sh.clip}</clipPath><g clip-path="url(#l3-bigclip-${st})">`
-      + images.map((src, i) => src ? `<image href="${esc(src)}" x="${sh.x0 + i * sw}" y="${sh.y0}" width="${sw}" height="${sh.h}" preserveAspectRatio="xMidYMid slice"></image>` : '').join('')
-      + (tint && COLOR[tint] ? `<rect x="${sh.x0}" y="${sh.y0}" width="${sh.w}" height="${sh.h}" fill="${COLOR[tint]}" fill-opacity="${TINT_OPACITY}"></rect>` : '')
+      + images.map((src, i) => src ? `<image href="${esc(src)}" x="${sh.x0 + i * sw}" y="${sh.y0}" width="${sw}" height="${sh.h}" preserveAspectRatio="xMidYMid slice"${monoAttr(tint)}></image>` : '').join('')
       + images.slice(1).map((_, i) => `<line x1="${sh.x0 + (i + 1) * sw}" y1="${sh.y0}" x2="${sh.x0 + (i + 1) * sw}" y2="${sh.y0 + sh.h}" stroke="var(--bg)" stroke-width="3"></line>`).join('')
       + '</g>' + sh.el('none');
   }
@@ -245,7 +251,7 @@
     else if (info.ballot && (info.ballot.images || []).some(Boolean)) art = bigFill(st, sh, info.ballot.images, info.demo && info.demo.color);
     else art = sh.el(fillFor(info).startsWith('url(') ? 'var(--none)' : fillFor(info));
     const us = info.us.called ? `${esc(info.us.winner || info.us.party)} (${esc(info.usColor)})` : 'not yet called';
-    let html = `<div class="l3-big"><svg viewBox="0 0 ${sh.W} ${sh.H}">${art}</svg></div>
+    let html = `<div class="l3-big"><svg viewBox="0 0 ${sh.W} ${sh.H}"><defs>${monoFilters()}</defs>${art}</svg></div>
       <div class="l3-dname">${esc(NAMES[st])}</div>
       <div class="l3-dsub">united states: ${us} · grotto: ${res ? (res.color ? esc(res.color) : 'vacant') : 'not yet decided'}${res && res.consensus ? ' · ✓ consensus' : ''}</div>`;
     if (res) {
