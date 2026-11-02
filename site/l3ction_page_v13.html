@@ -30,6 +30,7 @@
 .l3-x { position:absolute; top:6px; right:10px; background:none; border:none; color:var(--muted); font-size:24px; cursor:pointer }
 .l3-big svg { width:100%; max-height:70vh; display:block }
 .l3-dname { font-size:34px; font-weight:300; letter-spacing:.06em; text-align:center; margin:10px 0 2px }
+.l3-dwinner { text-align:center; font-size:20px; letter-spacing:.05em; color:var(--accent); margin:0 0 4px }
 .l3-dsub { text-align:center; color:var(--muted); font-size:13px; letter-spacing:.1em; margin-bottom:18px }
 .l3-dsec { margin-top:18px }
 .l3-dsec h4 { font-size:12px; letter-spacing:.25em; color:var(--accent); font-weight:400; margin:0 0 8px; border-bottom:1px solid var(--border); padding-bottom:4px }
@@ -144,11 +145,19 @@
       return `<filter id="l3-mono-${name}" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="${row(0)} ${row(1)} ${row(2)} 0 0 0 1 0"></feColorMatrix></filter>`;
     }).join('');
   }
+  const CARD_AR = 5 / 7, FACE_Y = 0.33;
+  function focusImage(src, x, y, w, h, extra) {
+    const s = Math.max(w / CARD_AR, h);            // image height that covers the box at 5:7
+    const ih = s, iw = s * CARD_AR;
+    const ix = Math.min(x, Math.max(x + w - iw, x + w / 2 - iw / 2));
+    const iy = Math.min(y, Math.max(y + h - ih, y + h / 2 - FACE_Y * ih));
+    return `<image href="${esc(src)}" x="${ix}" y="${iy}" width="${iw}" height="${ih}" preserveAspectRatio="xMidYMid slice"${extra || ''}></image>`;
+  }
   const monoAttr = (color) => MONO_BASE[color] ? ` filter="url(#l3-mono-${color})"` : '';
   function paintings(st, info, clipShape, x0, y0, w, h) {
     const art = artFor(st, info), imgs = art.images, n = imgs.length, sw = w / n;
     return `<clipPath id="l3-clip-${st}">${clipShape}</clipPath><g clip-path="url(#l3-clip-${st})">`
-      + imgs.map((src, i) => src ? `<image href="${esc(src)}" x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" preserveAspectRatio="xMidYMid slice"${monoAttr(art.color)}></image>` : `<rect x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" fill="var(--none)"></rect>`).join('')
+      + imgs.map((src, i) => src ? `<g><clipPath id="l3-strip-${st}-${i}"><rect x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}"></rect></clipPath><g clip-path="url(#l3-strip-${st}-${i})">${focusImage(src, x0 + i * sw, y0, sw, h, monoAttr(art.color))}</g></g>` : `<rect x="${x0 + i * sw}" y="${y0}" width="${sw}" height="${h}" fill="var(--none)"></rect>`).join('')
       + (n > 1 ? imgs.slice(1).map((_, i) => `<line x1="${x0 + (i + 1) * sw}" y1="${y0}" x2="${x0 + (i + 1) * sw}" y2="${y0 + h}" stroke="var(--bg)" stroke-width="1.5"></line>`).join('') : '')
       + '</g>';
   }
@@ -246,7 +255,7 @@
   function bigFill(st, sh, images, tint) {
     const n = images.length, sw = sh.w / n;
     return `<clipPath id="l3-bigclip-${st}">${sh.clip}</clipPath><g clip-path="url(#l3-bigclip-${st})">`
-      + images.map((src, i) => src ? `<image href="${esc(src)}" x="${sh.x0 + i * sw}" y="${sh.y0}" width="${sw}" height="${sh.h}" preserveAspectRatio="xMidYMid slice"${monoAttr(tint)}></image>` : '').join('')
+      + images.map((src, i) => src ? `<g><clipPath id="l3-bigstrip-${st}-${i}"><rect x="${sh.x0 + i * sw}" y="${sh.y0}" width="${sw}" height="${sh.h}"></rect></clipPath><g clip-path="url(#l3-bigstrip-${st}-${i})">${focusImage(src, sh.x0 + i * sw, sh.y0, sw, sh.h, monoAttr(tint))}</g></g>` : '').join('')
       + images.slice(1).map((_, i) => `<line x1="${sh.x0 + (i + 1) * sw}" y1="${sh.y0}" x2="${sh.x0 + (i + 1) * sw}" y2="${sh.y0 + sh.h}" stroke="var(--bg)" stroke-width="3"></line>`).join('')
       + '</g>' + sh.el('none');
   }
@@ -261,6 +270,7 @@
     const us = info.us.called ? `${esc(info.us.winner || info.us.party)} (${esc(info.usColor)})` : 'not yet called';
     let html = `<div class="l3-big"><svg viewBox="0 0 ${sh.W} ${sh.H}"><defs>${monoFilters()}</defs>${art}</svg></div>
       <div class="l3-dname">${esc(NAMES[st])}</div>
+      ${res && res.winner ? `<div class="l3-dwinner">${esc(res.winner.name)}${res.contested ? ' <span class="l3-dim">wins a contested race</span>' : ''}</div>` : ''}
       <div class="l3-dsub">united states: ${us} · grotto: ${res ? (res.color ? esc(res.color) : 'vacant') : 'not yet decided'}${res && res.consensus ? ' · ✓ consensus' : ''}</div>`;
     if (res) {
       html += resultSections(res, info);
