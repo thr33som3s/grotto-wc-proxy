@@ -580,6 +580,7 @@ export const RESULTS_REVEALED = true;    // revealed Nov 3, once all 12 voting e
 export function mapResults(tallyOut, input, tokens) {
   const out = {};
   const img = (k) => tokens.get(k)?.image || "";
+  const fate = new Map((tallyOut.votes || []).map((v) => [v.vote, v]));
   for (const r of tallyOut.races) {
     const cands = input.candidacies.filter((c) => c.race === r.race);
     const winnerCand = r.winner ? cands.find((c) => c.candidate === r.winner) : null;
@@ -587,9 +588,10 @@ export function mapResults(tallyOut, input, tokens) {
       color: r.color, status: r.status, red: r.red, blue: r.blue, placementRed: r.placementRed, placementBlue: r.placementBlue, voteRed: r.voteRed, voteBlue: r.voteBlue,
       contested: r.contested, decidedByTimestamp: r.decidedByTimestamp, candidateVotes: r.candidateVotes, consensus: r.consensus, usResult: r.usResult,
       winner: r.winner ? { name: r.winner, image: winnerCand ? img(winnerCand.token) : "" } : null,
-      candidates: cands.map((c) => ({ name: c.candidate, image: img(c.token), collector: c.collector, won: c.candidate === r.winner })),
+      candidates: cands.map((c) => ({ name: c.candidate, token: c.token, image: img(c.token), collector: c.collector, won: c.candidate === r.winner })),
       votes: input.votes.filter((v) => v.race === r.race).map((v) => ({ token: v.token.id, name: tokens.get(v.token.id)?.name || v.token.id, image: img(v.token.id),
-        color: v.token.color, declared: v.declared || "", multiplier: v.token.multiplier, home: !!v.home, candidate: v.candidate || "", collector: v.collector, pending: !!v.pending })),
+        color: v.token.color, declared: v.declared || "", multiplier: v.token.multiplier, home: !!v.home, candidate: v.candidate || "", collector: v.collector, pending: !!v.pending,
+        outcome: fate.get(v.id)?.outcome || "", awardedTo: fate.get(v.id)?.awardedTo || "" })),
     };
   }
   return out;
