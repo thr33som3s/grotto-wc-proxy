@@ -30,6 +30,15 @@
 .l3-x { position:absolute; top:6px; right:10px; background:none; border:none; color:var(--muted); font-size:24px; cursor:pointer }
 .l3-big svg { width:100%; max-height:70vh; display:block }
 .l3-dname { font-size:34px; font-weight:300; letter-spacing:.06em; text-align:center; margin:10px 0 2px }
+.l3-click { cursor:pointer }
+.l3-click:hover img { outline:1px solid var(--accent) }
+.l3-back { background:none; border:1px solid var(--border); color:var(--muted); font:inherit; font-size:13px; padding:6px 12px; cursor:pointer; text-transform:lowercase }
+.l3-piece { display:flex; gap:16px; align-items:center; margin:16px 0 8px }
+.l3-piece img { width:120px; aspect-ratio:5/7; object-fit:cover; background:var(--surface2) }
+.l3-tablewrap { overflow-x:auto }
+.l3-tbl { width:100%; border-collapse:collapse; font-size:13px }
+.l3-tbl th { text-align:left; color:var(--muted); font-weight:400; border-bottom:1px solid var(--border); padding:6px 8px }
+.l3-tbl td { border-bottom:1px solid var(--surface2); padding:6px 8px; vertical-align:top }
 .l3-dwinner { text-align:center; font-size:20px; letter-spacing:.05em; color:var(--accent); margin:0 0 4px }
 .l3-dsub { text-align:center; color:var(--muted); font-size:13px; letter-spacing:.1em; margin-bottom:18px }
 .l3-dsec { margin-top:18px }
@@ -233,7 +242,7 @@
         tip.innerHTML = `<strong>${esc(NAMES[st])}</strong><br>united states: ${us}<br>grotto: ${g}`
           + (info.ballot ? `<br>${info.ballot.contested ? 'contested · ' : ''}candidate${info.ballot.candidates.length > 1 ? 's' : ''}: ${info.ballot.candidates.map(esc).join(' · ')}${info.ballot.runs > info.ballot.candidates.length ? ` (${info.ballot.runs} runs)` : ''}`
             : data.ballots ? '<br>no candidate: no voting here' : '')
-          + (info.demo ? `<br>demographics: red ${info.demo.red} · blue ${info.demo.blue}` : '')
+          + (info.demo ? `<br>turnout: red ${info.demo.red} · blue ${info.demo.blue}` : '')
           + (view === 'consensus' && info.match ? '<br>✓ consensus' : '');
         tip.style.display = 'block';
         tip.style.left = Math.min(e.clientX - r.left + 14, r.width - 290) + 'px';
@@ -285,46 +294,90 @@
       html += resultSections(res, info);
     }
     if (!res && info.ballot) {
-      html += `<div class="l3-dsec"><h4>${info.ballot.contested ? 'contested · ' : ''}candidates</h4><div class="l3-thumbs">${info.ballot.candidates.map((n, i) => thumb((info.ballot.images || [])[i], [n])).join('')}</div>
+      html += `<div class="l3-dsec"><h4>${info.ballot.contested ? 'contested · ' : ''}candidates</h4><div class="l3-thumbs">${info.ballot.candidates.map((n, i) => thumb((info.ballot.images || [])[i], [n]).replace('<div class="l3-thumb', `<div data-pk="cand" data-key="${esc(n)}" class="l3-click l3-thumb`)).join('')}</div>
         ${info.ballot.runs > info.ballot.candidates.length ? `<p class="l3-dsub" style="text-align:left;margin-top:8px">${info.ballot.runs} runs. who ran them is revealed with the results.</p>` : ''}</div>`;
     } else if (!res && data.ballots && !info.demo) {
-      html += '<p class="l3-dsub">no candidate: no voting here. demographics placed here still set its color, revealed with the results.</p>';
+      html += '<p class="l3-dsub">no candidate: no voting here. its demographic turnout still sets its color, revealed with the results.</p>';
     } else if (!res && data.ballots) {
-      html += '<p class="l3-dsub">no candidate: no voting here. its demographics set its color.</p>';
+      html += '<p class="l3-dsub">no candidate: no voting here. its demographic turnout sets its color.</p>';
     } else if (!res) {
       html += '<p class="l3-dsub">candidates are revealed when demographics entries close.</p>';
     }
     if (!res && info.demo) html += demoSection(info.demo);
     $('l3-detail-body').innerHTML = html;
     $('l3-detail').classList.add('open');
+    $('l3-detail').scrollTop = 0;
+    document.querySelectorAll('#l3-detail-body .l3-click').forEach(t => t.onclick = () => openPiece(t.dataset.pk, t.dataset.key, st));
     $('l3-tip').style.display = 'none';
   }
   // Demographics in a state: totals, then one line per demographic and color, each card once with a ×N badge
   // when the same card was placed more than once, and who placed it.
   function demoSection(dm) {
-    return `<div class="l3-dsec"><h4>demographics · red ${dm.red} · blue ${dm.blue} · ${esc(dm.color)}</h4>`
+    return `<div class="l3-dsec"><h4>demographic turnout · red ${dm.red} · blue ${dm.blue} · ${esc(dm.color)}</h4>`
       + dm.groups.map(g => `<div class="l3-dgroup"><div class="l3-dgh">${esc(g.team)} · ${esc(g.color)}${g.count > 1 ? ' · ×' + g.count : ''}</div><div class="l3-thumbs">`
-        + g.cards.map(c => `<div class="l3-thumb"><div class="l3-tw">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : '<img alt="">'}${c.count > 1 ? `<span class="l3-badge">×${c.count}</span>` : ''}</div>${esc(c.name)}${c.straddle ? '<br><span class="l3-dim">straddle</span>' : ''}<br><span class="l3-who">${c.collectors.map(esc).join(' · ')}</span></div>`).join('')
+        + g.cards.map(c => `<div class="l3-thumb l3-click" data-pk="demo" data-key="${esc(c.key)}" title="every turnout of this card"><div class="l3-tw">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : '<img alt="">'}${c.count > 1 ? `<span class="l3-badge">×${c.count}</span>` : ''}</div>${esc(c.name)}${c.straddle ? '<br><span class="l3-dim">straddle</span>' : ''}<br><span class="l3-who">${c.collectors.map(esc).join(' · ')}</span></div>`).join('')
         + '</div></div>').join('') + '</div>';
   }
   // Results in a state: the totals, candidates (with who ran them and their support), demographics (grouped),
   // and votes grouped by token, candidate and declared color, with a ×N badge and every voter.
   function resultSections(res, info) {
     let s = `<div class="l3-dsec"><h4>result · ${esc(res.color || 'vacant')}${res.decidedByTimestamp ? ' · tie decided by first vote' : ''}</h4>
-      <p class="l3-dsub" style="text-align:left">red ${res.red} (placements ${res.placementRed} + votes ${res.voteRed}) · blue ${res.blue} (placements ${res.placementBlue} + votes ${res.voteBlue})</p></div>`;
+      <p class="l3-dsub" style="text-align:left">red ${res.red} (turnout ${res.placementRed} + votes ${res.voteRed}) · blue ${res.blue} (turnout ${res.placementBlue} + votes ${res.voteBlue})</p></div>`;
     if ((res.candidates || []).length) {
       const seen = new Map();
       for (const c of res.candidates) { const k = c.name; if (!seen.has(k)) seen.set(k, { ...c, collectors: [] }); seen.get(k).collectors.push(c.collector); }
-      s += `<div class="l3-dsec"><h4>${res.contested ? 'contested · ' : ''}candidates</h4><div class="l3-thumbs">${[...seen.values()].map(c => `<div class="l3-thumb${c.won ? ' won' : ''}"><div class="l3-tw">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : '<img alt="">'}${c.collectors.length > 1 ? `<span class="l3-badge">×${c.collectors.length}</span>` : ''}</div>${esc(c.name)}${c.won ? ' · <span class="l3-who">winner</span>' : ''}${res.candidateVotes && res.candidateVotes[c.name] != null ? `<br><span class="l3-dim">support ${res.candidateVotes[c.name]}</span>` : ''}<br><span class="l3-who">run by ${c.collectors.map(esc).join(' · ')}</span></div>`).join('')}</div></div>`;
+      s += `<div class="l3-dsec"><h4>${res.contested ? 'contested · ' : ''}candidates</h4><div class="l3-thumbs">${[...seen.values()].map(c => `<div class="l3-thumb l3-click${c.won ? ' won' : ''}" data-pk="cand" data-key="${esc(c.name)}" title="every race this candidate ran in"><div class="l3-tw">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : '<img alt="">'}${c.collectors.length > 1 ? `<span class="l3-badge">×${c.collectors.length}</span>` : ''}</div>${esc(c.name)}${c.won ? ' · <span class="l3-who">winner</span>' : ''}${res.candidateVotes && res.candidateVotes[c.name] != null ? `<br><span class="l3-dim">support ${res.candidateVotes[c.name]}</span>` : ''}<br><span class="l3-who">run by ${c.collectors.map(esc).join(' · ')}</span></div>`).join('')}</div></div>`;
     }
     if (info.demo) s += demoSection(info.demo);
     if ((res.votes || []).length) {
       const g = new Map();
       for (const v of res.votes) { const k = [v.token, v.candidate, v.declared, v.multiplier].join('|'); if (!g.has(k)) g.set(k, { ...v, voters: [] }); g.get(k).voters.push(v.collector + (v.pending ? ' (pending)' : '')); }
-      s += `<div class="l3-dsec"><h4>votes · ${res.votes.length}</h4><div class="l3-thumbs">${[...g.values()].map(v => `<div class="l3-thumb"><div class="l3-tw">${v.image ? `<img src="${esc(v.image)}" alt="" loading="lazy">` : '<img alt="">'}${v.voters.length > 1 ? `<span class="l3-badge">×${v.voters.length}</span>` : ''}</div>${esc(v.color)}${v.declared ? ' → ' + esc(v.declared) : ''} ×${v.home ? v.multiplier / 2 : v.multiplier}${v.home ? ` · <span class="l3-who">home county: counts ${v.multiplier}</span>` : ''}${v.candidate ? `<br>for ${esc(v.candidate)}` : ''}<br><span class="l3-who">${v.voters.map(esc).join(' · ')}</span></div>`).join('')}</div></div>`;
+      s += `<div class="l3-dsec"><h4>votes · ${res.votes.length}</h4><div class="l3-thumbs">${[...g.values()].map(v => `<div class="l3-thumb l3-click" data-pk="vote" data-key="${esc(v.token)}" title="every vote cast with this token"><div class="l3-tw">${v.image ? `<img src="${esc(v.image)}" alt="" loading="lazy">` : '<img alt="">'}${v.voters.length > 1 ? `<span class="l3-badge">×${v.voters.length}</span>` : ''}</div>${esc(v.color)}${v.declared ? ' → ' + esc(v.declared) : ''} ×${v.home ? v.multiplier / 2 : v.multiplier}${v.home ? ` · <span class="l3-who">home county: counts ${v.multiplier}</span>` : ''}${v.candidate ? `<br>for ${esc(v.candidate)}` : ''}<br><span class="l3-who">${v.voters.map(esc).join(' · ')}</span></div>`).join('')}</div></div>`;
     }
     if (!(res.candidates || []).length && !info.demo && !(res.votes || []).length) s += '<p class="l3-dsub">no candidates, demographics or votes: vacant.</p>';
     return s;
+  }
+  // A piece across the whole 3l3ction: a demographic card (every turnout of it, and its team's turnout everywhere),
+  // a candidate (every race they ran in), or a voting token (every vote cast with it). "back" returns to the state.
+  function openPiece(kind, key, fromSt) {
+    const races = Object.keys(NAMES).filter(r => (data.races || []).includes(r));
+    const name = (r) => esc(NAMES[r]);
+    let title = '', img = '', body = '';
+    const tbl = (head, rows) => `<div class="l3-tablewrap"><table class="l3-tbl"><tr>${head.map(x => `<th>${x}</th>`).join('')}</tr>${rows.join('')}</table></div>`;
+    if (kind === 'demo') {
+      let team = '', rows = [], total = { red: 0, blue: 0 };
+      for (const r of races) for (const g of ((data.demographics || {})[r] || {}).groups || []) for (const c of g.cards)
+        if (c.key === key) { team = g.team; title = c.name; img = c.image; total[g.color] += c.count;
+          rows.push(`<tr><td>${name(r)}</td><td>${esc(g.team)}</td><td>${esc(g.color)}${c.straddle ? ' (straddle)' : ''}</td><td>${c.count}</td><td>${c.collectors.map(esc).join(' · ')}</td></tr>`); }
+      body += `<div class="l3-dsec"><h4>this card · ${rows.length} race${rows.length !== 1 ? 's' : ''} · red turnout ${total.red} · blue turnout ${total.blue}</h4>${tbl(['race', 'demographic', 'color', 'turnout', 'turned out by'], rows)}</div>`;
+      const tr = [], tt = { red: 0, blue: 0 };
+      for (const r of races) { let red = 0, blue = 0; const cards = [];
+        for (const g of ((data.demographics || {})[r] || {}).groups || []) if (g.team === team) { if (g.color === 'red') red += g.count; else blue += g.count; g.cards.forEach(c => cards.push(`${esc(c.name)}${c.count > 1 ? ' ×' + c.count : ''} (${esc(g.color)})`)); }
+        if (red + blue) { tt.red += red; tt.blue += blue; tr.push(`<tr><td>${name(r)}</td><td>${red || ''}</td><td>${blue || ''}</td><td>${cards.join(' · ')}</td></tr>`); } }
+      body += `<div class="l3-dsec"><h4>${esc(team)} across the 3l3ction · red turnout ${tt.red} · blue turnout ${tt.blue}</h4>${tbl(['race', 'red', 'blue', 'cards'], tr)}</div>`;
+    } else if (kind === 'cand') {
+      title = key; const rows = [];
+      for (const r of races) {
+        const res = resultOf(r), b = (data.ballots || {})[r];
+        if (res && (res.candidates || []).some(c => c.name === key)) {
+          const runs = res.candidates.filter(c => c.name === key); img = img || runs[0].image;
+          rows.push(`<tr><td>${name(r)}</td><td>${runs.map(c => esc(c.collector)).join(' · ')}</td><td>${runs[0].won ? '<strong>won</strong>' : 'lost'}</td><td>${esc(res.color || '')}</td><td>${res.candidateVotes && res.candidateVotes[key] != null ? res.candidateVotes[key] : ''}</td></tr>`);
+        } else if (!res && b && b.candidates.includes(key)) { img = img || (b.images || [])[b.candidates.indexOf(key)]; rows.push(`<tr><td>${name(r)}</td><td>revealed with the results</td><td></td><td></td><td></td></tr>`); }
+      }
+      const won = rows.filter(x => x.includes('<strong>won')).length;
+      body += `<div class="l3-dsec"><h4>${rows.length} race${rows.length !== 1 ? 's' : ''}${data.results ? ` · won ${won}` : ''}</h4>${tbl(['race', 'run by', 'result', 'race color', 'support'], rows)}</div>`;
+    } else if (kind === 'vote') {
+      const rows = []; let n = 0, counted = 0;
+      for (const r of races) for (const v of (resultOf(r) || {}).votes || []) if (v.token === key) {
+        title = v.name; img = v.image; n++; counted += v.multiplier;
+        const goes = v.outcome === 'returned' ? 'returned' : v.outcome === 'kept' ? 'kept' : v.outcome === 'redistributed' ? 'awarded to ' + esc(v.awardedTo) : esc(v.outcome || '');
+        rows.push(`<tr><td>${name(r)}</td><td>${esc(v.collector)}</td><td>${esc(v.color)}${v.declared ? ' → ' + esc(v.declared) : ''}</td><td>${v.multiplier}${v.home ? ' (home county)' : ''}</td><td>${esc(v.candidate)}</td><td>${goes}</td></tr>`); }
+      body += `<div class="l3-dsec"><h4>${n} vote${n !== 1 ? 's' : ''} · ${counted} counted</h4>${tbl(['race', 'cast by', 'color', 'counts', 'for', 'token'], rows)}</div>`;
+    }
+    $('l3-detail-body').innerHTML = `<button class="l3-back" id="l3-back">← ${esc(NAMES[fromSt])}</button>
+      <div class="l3-piece">${img ? `<img src="${esc(img)}" alt="">` : ''}<div class="l3-dname" style="text-align:left">${esc(title || key)}</div></div>${body}`;
+    $('l3-detail').scrollTop = 0;
+    $('l3-back').onclick = () => openState(fromSt);
   }
   function closeState() { $('l3-detail').classList.remove('open'); }
 
