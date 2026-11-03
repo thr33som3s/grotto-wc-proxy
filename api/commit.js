@@ -85,7 +85,10 @@ export default async function handler(req, res) {
 const ARTIST_WALLET = "0xfe917312344b4ed3283c5e142868cd3eaa782933";
 async function map(res, KEY, wallet) {
   const preview = wallet === ARTIST_WALLET;
-  res.setHeader("Cache-Control", preview ? "private, no-store" : "s-maxage=60, stale-while-revalidate=120");
+  // Usernames go only to a signed-in collector; everyone else sees the last 4 characters of each wallet.
+  // A signed-in view is never cached, so it can't reach anyone else.
+  const signedIn = !!wallet;
+  res.setHeader("Cache-Control", signedIn ? "private, no-store" : "s-maxage=60, stale-while-revalidate=120");
   const now = Date.now();
   const out = { races: RACES, schedule: PHASES, us: await readUsResults(KEY), candidateCount: null, ballots: null, preview, generatedAt: new Date().toISOString() };
   if (preview || now > Date.parse(PHASES.candidacy.confirmCloses)) {
@@ -100,7 +103,8 @@ async function map(res, KEY, wallet) {
       const [{ commitments: demos = [] }, bulk, { profiles = [] }] = await Promise.all([store("list_commitments", { phase: storedPhase("demographics") }), collectionTokens(KEY, "bulk").catch(() => []), store("list_profiles", {})]);
       // The store's entry list carries no usernames; attach each collector's from their profile.
       const userOf = new Map(profiles.map((p) => [String(p.wallet).toLowerCase(), p.username]));
-      const named = (list) => list.map((e) => ({ ...e, username: e.username || userOf.get(String(e.wallet).toLowerCase()) || "" }));
+      const short = (w) => "…" + String(w).toLowerCase().slice(-4);
+      const named = (list) => list.map((e) => ({ ...e, username: signedIn ? (userOf.get(String(e.wallet).toLowerCase()) || short(e.wallet)) : short(e.wallet) }));
       demos.splice(0, demos.length, ...named(demos));
       commitments.splice(0, commitments.length, ...named(commitments));
       const tokens = new Map([...univ, ...bulk].map((t) => [t.key, t]));
