@@ -572,7 +572,7 @@ export function tallyInput({ candidacy = [], demographics = [], voting = [] }, t
   }
   return { input, status };
 }
-export const RESULTS_REVEALED = false;   // thr33s's preview only, until he says
+export const RESULTS_REVEALED = true;    // revealed Nov 3, once all 12 voting entries were confirmed
 
 // Per-race results for the map: race color and totals, the winner, every candidate (with who ran it), and every
 // vote (token, color, declared, weight, home county, candidate, collector, pending). Demographics come from the
