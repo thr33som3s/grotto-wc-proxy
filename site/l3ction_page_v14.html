@@ -71,7 +71,7 @@
     </div>
   </div>
 
-  <div class="l3-previewbar" id="l3-preview">preview · only you can see this. preliminary results: voting entries still waiting on their burns are counted, marked pending.</div>
+  <div class="l3-previewbar" id="l3-preview">signed in as thr33som3s · you see everything visitors see.</div>
   <div class="l3-mapwrap"><div class="l3-map" id="l3-map">loading the map...</div><div class="l3-tip" id="l3-tip"></div></div>
   <div class="l3-detail" id="l3-detail"><div class="l3-detail-box"><button class="l3-x" id="l3-x" aria-label="minimize">✕</button><div id="l3-detail-body"></div></div></div>
   <div class="l3-legend" id="l3-legend"></div>
@@ -216,6 +216,13 @@
       : view === 'grotto' ? (decided ? `${decided} of ${data.races.length} grotto races decided` : 'grotto results are revealed after voting confirmations close, mon nov 2')
       : `consensus: ${matches} of ${called} called races match the grotto`);
   }
+  // Hovering a state on the map lifts the color filter, showing the original painting; leaving restores it.
+  function showOriginal(st, on) {
+    document.querySelectorAll(`#l3-map g[clip-path="url(#l3-clip-${st})"] image`).forEach(im => {
+      if (on) { if (im.hasAttribute('filter')) { im.dataset.mono = im.getAttribute('filter'); im.removeAttribute('filter'); } }
+      else if (im.dataset.mono) { im.setAttribute('filter', im.dataset.mono); delete im.dataset.mono; }
+    });
+  }
   function bindTips() {
     const tip = $('l3-tip'), wrap = tip.parentElement;
     document.querySelectorAll('#l3-map .l3-state.race').forEach(el => {
@@ -232,7 +239,8 @@
         tip.style.left = Math.min(e.clientX - r.left + 14, r.width - 290) + 'px';
         tip.style.top = (e.clientY - r.top + 14) + 'px';
       });
-      el.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+      el.addEventListener('mouseleave', () => { tip.style.display = 'none'; showOriginal(el.dataset.st, false); });
+      el.addEventListener('mouseenter', () => showOriginal(el.dataset.st, true));
       el.addEventListener('click', () => openState(el.dataset.st));
     });
   }
@@ -246,24 +254,25 @@
       if (f) {
         const path = d3.geoPath(d3.geoIdentity().fitExtent([[pad, pad], [W - pad, H - pad]], f));
         const [[x0, y0], [x1, y1]] = path.bounds(f);
-        return { d: path(f), x0, y0, w: x1 - x0, h: y1 - y0, W, H, el: (fill) => `<path d="${path(f)}" fill="${fill}" stroke="var(--accent)" stroke-width="1.5"></path>`, clip: `<path d="${path(f)}"></path>` };
+        return { d: path(f), x0, y0, w: x1 - x0, h: y1 - y0, W, H, el: (fill, stroke, sw) => `<path d="${path(f)}" fill="${fill}" stroke="${stroke || 'var(--accent)'}" stroke-width="${sw || 1.5}" stroke-linejoin="round"></path>`, clip: `<path d="${path(f)}"></path>` };
       }
     }
     const s = W - 2 * pad;
-    return { x0: pad, y0: pad, w: s, h: s, W, H, el: (fill) => `<rect x="${pad}" y="${pad}" width="${s}" height="${s}" fill="${fill}" stroke="var(--accent)" stroke-width="1.5"></rect>`, clip: `<rect x="${pad}" y="${pad}" width="${s}" height="${s}"></rect>` };
+    return { x0: pad, y0: pad, w: s, h: s, W, H, el: (fill, stroke, sw) => `<rect x="${pad}" y="${pad}" width="${s}" height="${s}" fill="${fill}" stroke="${stroke || 'var(--accent)'}" stroke-width="${sw || 1.5}" stroke-linejoin="round"></rect>`, clip: `<rect x="${pad}" y="${pad}" width="${s}" height="${s}"></rect>` };
   }
-  function bigFill(st, sh, images, tint) {
+  // outline: { color, width } draws the state's edge in that color (the results view).
+  function bigFill(st, sh, images, tint, outline) {
     const n = images.length, sw = sh.w / n;
     return `<clipPath id="l3-bigclip-${st}">${sh.clip}</clipPath><g clip-path="url(#l3-bigclip-${st})">`
       + images.map((src, i) => src ? `<g><clipPath id="l3-bigstrip-${st}-${i}"><rect x="${sh.x0 + i * sw}" y="${sh.y0}" width="${sw}" height="${sh.h}"></rect></clipPath><g clip-path="url(#l3-bigstrip-${st}-${i})">${focusImage(src, sh.x0 + i * sw, sh.y0, sw, sh.h, monoAttr(tint))}</g></g>` : '').join('')
       + images.slice(1).map((_, i) => `<line x1="${sh.x0 + (i + 1) * sw}" y1="${sh.y0}" x2="${sh.x0 + (i + 1) * sw}" y2="${sh.y0 + sh.h}" stroke="var(--bg)" stroke-width="3"></line>`).join('')
-      + '</g>' + sh.el('none');
+      + '</g>' + (outline ? sh.el('none', outline.color, outline.width) : sh.el('none'));
   }
   const thumb = (img, lines, won) => `<div class="l3-thumb${won ? ' won' : ''}">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : '<img alt="">'}${lines.filter(Boolean).map(esc).join('<br>')}</div>`;
   function openState(st) {
     const info = stateInfo(st), res = (data.results || {})[st] || null, sh = bigShape(st);
     let art;
-    if (res && res.winner && res.winner.image) art = bigFill(st, sh, [res.winner.image], res.color);
+    if (res && res.winner && res.winner.image) art = bigFill(st, sh, [res.winner.image], null, { color: COLOR[res.color] || 'var(--accent)', width: 12 });
     else if (res) art = sh.el(COLOR[res.color] || 'var(--none)');
     else if (info.ballot && (info.ballot.images || []).some(Boolean)) art = bigFill(st, sh, info.ballot.images, info.demo && info.demo.color);
     else art = sh.el(fillFor(info).startsWith('url(') ? 'var(--none)' : fillFor(info));
