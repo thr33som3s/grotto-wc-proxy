@@ -1,6 +1,6 @@
 <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
 <script>
-// CONN3CT v49. Page Header Code Injection for thr33som3s.com/conn3ct. Pairs with code block v3.
+// CONN3CT v50. Page Header Code Injection for thr33som3s.com/conn3ct. Pairs with code block v3.
 // Adds profiles, sign-in, the 3l3ction candidacy screen, and opening the page inside wallet apps on phones.
 // All data comes from the proxy: /api/catalog (metadata, families, editions), /api/holdings
 // (any wallet's balances) and /api/holders (who holds a piece). Those read the ledger, which
@@ -1080,7 +1080,7 @@ async function openDemographics(info, head) {
       const p = info.entry.payload, sent = info.sent || {};
       const done = p.demographics.filter(d => d.kind === 'added').every(d => (sent[d.card + '>333burn'] || 0) >= 1)
         && p.inserts.every(i => (sent[i.key + '>3vault'] || 0) >= i.qty);
-      modalBody(head + demoSummary(p, done ? 'your demographics are confirmed and in play.' : 'your demographics entry was not fully confirmed in time, so all of its demographics and placements are void. pieces already sent will not be returned.'));
+      modalBody(head + demoSummary(p, done ? 'your demographics are confirmed and in play.' : 'your demographics entry was not fully confirmed in time, so all of its demographics and turnouts are void. pieces already sent will not be returned.'));
       return;
     }
     modalBody(head + demoSummary(info.entry.payload, 'your demographics entry is in and final.') + pledgeHtml()
@@ -1093,7 +1093,7 @@ async function openDemographics(info, head) {
       : 'demographics entries are closed, and this wallet did not submit an entry.')}</p>`);
     return;
   }
-  // Races where this collector ran a candidate are marked, since their placements count toward that candidate.
+  // Races where this collector ran a candidate are marked, since their turnouts count toward that candidate.
   let myRaces = new Set();
   try { const c = await api('/commit?phase=candidacy', { auth: true }); if (c.entry) myRaces = new Set(c.entry.payload.entries.map(e => e.race)); } catch (e) {}
   if (!dState) { dReset(); dLoad(); }
@@ -1234,12 +1234,12 @@ function openCart(note) {
   const demoRows = dState.demos.map((d, i) => {
     const title = d.kind === 'straddle' ? `straddle · ${esc(d.team)} (${esc(d.color || 'opposite color')})` : `${d.kind === 'free' ? 'free' : 'added · burns to 333burn'} · ${esc(demographicOf(byKey.get(d.card)) || '')} (${esc(d.color)}) · ${esc(name(d.card))}`;
     const cap = D_CAP[d.tiers - 1];
-    const levels = D_CAP.map((c, n) => `<option value="${n + 1}" ${d.tiers === n + 1 ? 'selected' : ''}>${c} placements · ${dCost(d.kind, n + 1).toLocaleString()} inserts</option>`).join('');
+    const levels = D_CAP.map((c, n) => `<option value="${n + 1}" ${d.tiers === n + 1 ? 'selected' : ''}>${c} turnouts · ${dCost(d.kind, n + 1).toLocaleString()} inserts</option>`).join('');
     const grid = races.map(([code, nm]) => { const on = d.races.includes(code), full = !on && d.races.length >= cap;
       return `<label class="c3-race${on ? ' on' : ''}${full ? ' off' : ''}" title="${esc(nm)}"><input type="checkbox" data-d="${i}" data-race="${code}" ${on ? 'checked' : ''} ${full ? 'disabled' : ''}>${code}${myRaces.has(code) ? '★' : ''}</label>`; }).join('');
     return `<div class="c3-step"><div><strong>${title}</strong> <button type="button" class="c3-link" data-rm="${i}">remove</button></div>
       <label class="c3-note">blocks <select data-d="${i}" data-f="tiers">${levels}</select></label>
-      <div class="${d.races.length < cap ? 'c3-msg' : 'c3-note'}">races: ${d.races.length} of ${cap} placed${d.races.length < cap ? ` · place ${cap - d.races.length} more` : ''}${myRaces.size ? ' · ★ = your candidate runs here' : ''}</div><div class="c3-races">${grid}</div></div>`;
+      <div class="${d.races.length < cap ? 'c3-msg' : 'c3-note'}">turnout: ${d.races.length} of ${cap} races${d.races.length < cap ? ` · turn out in ${cap - d.races.length} more` : ''}${myRaces.size ? ' · ★ = your candidate runs here' : ''}</div><div class="c3-races">${grid}</div></div>`;
   }).join('') || '<p class="c3-note">no demographics yet.</p>';
   const { cost, selected } = dTotals();
   const insRows = Object.entries(dState.inserts).map(([k, q]) => {
@@ -1252,13 +1252,13 @@ function openCart(note) {
   const unplaced = dState.demos.filter(d => d.races.length < D_CAP[d.tiers - 1]);
   const dLabel = d => `${d.kind === 'straddle' ? d.team : demographicOf(byKey.get(d.card)) || ''} (${d.color || 'no color'})`;
   const footer = !ready ? '<p class="c3-note">add at least one demographic to continue.</p>'
-    : unplaced.length ? `<div class="c3-counter">every placement you pay for must be placed:<br>${unplaced.map(d => `${esc(dLabel(d))}: ${d.races.length} of ${D_CAP[d.tiers - 1]} placed, place ${D_CAP[d.tiers - 1] - d.races.length} more`).join('<br>')}</div>`
+    : unplaced.length ? `<div class="c3-counter">every turnout you pay for must be used:<br>${unplaced.map(d => `${esc(dLabel(d))}: ${d.races.length} of ${D_CAP[d.tiers - 1]} turned out, turn out in ${D_CAP[d.tiers - 1] - d.races.length} more`).join('<br>')}</div>`
     : selected < cost ? `<p class="c3-counter">you have selected ${selected.toLocaleString()} of ${cost.toLocaleString()}</p>`
     : '<div class="c3-actions"><button class="c3-btn c3-primary" id="c3-dreview">review entry</button></div>';
   openModal(head + (note ? `<p class="c3-msg">${esc(note)}</p>` : '') + `<p><strong>your commitment</strong>. add pieces from the grid, edit them here, then review and sign. <strong>you get one entry, and it is final.</strong></p>
     <h4 class="c3-h4">demographics</h4>${demoRows}
     <div class="c3-actions"><button class="c3-btn" id="c3-browse-demo">${!dState.demos.some(d => d.kind === 'free') ? 'choose your free demographic' : dState.demos.filter(d => d.kind === 'added').length < 4 ? '+ add a team (up to 4)' : 'browse your demographic cards'}</button>${straddleable.length ? '<button class="c3-btn" id="c3-addstraddle">+ straddle</button>' : ''}</div>
-    <p><strong>your placements cost ${cost.toLocaleString()} inserts.</strong></p>
+    <p><strong>your turnouts cost ${cost.toLocaleString()} inserts.</strong></p>
     <h4 class="c3-h4">inserts</h4><div class="c3-ins-list">${insRows}</div>
     <div class="c3-actions"><button class="c3-btn" id="c3-browse-ins" ${cost ? '' : 'disabled'}>+ add inserts from your collection</button></div>
     ${pledgeHtml()}<div id="c3-dfoot">${footer}</div><p class="c3-msg" id="c3-msg"></p>`);
@@ -1286,7 +1286,7 @@ function dPayload() {
 }
 function demoSummary(p, lead) {
   const name = k => (byKey.get(k) || {}).name || k;
-  const rows = p.demographics.map(d => `<div class="c3-entry-row"><span>${esc(d.kind)} · ${esc(d.team)} (${esc(d.color)})${d.card ? ' · ' + esc(name(d.card)) : ''}</span><span>${D_CAP[d.tiers - 1]} placements · ${d.races.length ? esc(d.races.join(' ')) : 'no races'}</span></div>`).join('');
+  const rows = p.demographics.map(d => `<div class="c3-entry-row"><span>${esc(d.kind)} · ${esc(d.team)} (${esc(d.color)})${d.card ? ' · ' + esc(name(d.card)) : ''}</span><span>${D_CAP[d.tiers - 1]} turnouts · ${d.races.length ? esc(d.races.join(' ')) : 'no races'}</span></div>`).join('');
   const total = p.inserts.reduce((s, i) => s + i.qty, 0);
   const ins = p.inserts.map(i => `<div class="c3-entry-row"><span>${esc(name(i.key))}</span><span>×${i.qty.toLocaleString()}</span></div>`).join('');
   return `<p>${esc(lead)}</p><div class="c3-entry">${rows}</div>${total ? `<p><strong>inserts to 3vault: ${total.toLocaleString()}</strong></p><div class="c3-entry">${ins}</div>` : ''}`;
@@ -1388,7 +1388,7 @@ async function demoConfirm(head, info, note) {
   // status per item: amount already confirmed at its destination
   const status = {};
   for (const it of items) status[it.key + '>' + it.dest] = sent[it.key + '>' + it.dest] || 0;
-  const voidRule = '<p class="c3-note">complete every step before the deadline. if your commitment is not fully confirmed in time, all of its demographics and placements are void, and pieces already sent will not be returned.</p>';
+  const voidRule = '<p class="c3-note">complete every step before the deadline. if your commitment is not fully confirmed in time, all of its demographics and turnouts are void, and pieces already sent will not be returned.</p>';
   confirmChecklist({ head: head + (note ? `<p class="c3-msg">${esc(note)}</p>` : '') + voidRule, phase: 'demographics', items, status, closes: info.window.confirmCloses, keyOf: it => it.key + '>' + it.dest,
     rerender: (n) => demoConfirm(head, info, n) });
 }
