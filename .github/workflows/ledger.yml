@@ -31,6 +31,16 @@ jobs:
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/spreadsheets
           access_token_lifetime: 3600s
+      # Election night: the US Senate calls ride along with the ledger's reliable 5-minute trigger.
+      # Runs first and can't hold up or fail the ledger (continue-on-error, short timeout).
+      - name: US Senate results
+        continue-on-error: true
+        timeout-minutes: 3
+        run: node ledger/us-results.mjs
+        env:
+          LEDGER_SHEET_ID: 1vDH6lXF_xegq8pWzGdDgHJPwnmpmoDXZoMaWj967UtM
+          GOOGLE_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
+          ELECTION_DATE: "2026-11-03"
       - run: node ledger/run.mjs
         env:
           LEDGER_SHEET_ID: 1vDH6lXF_xegq8pWzGdDgHJPwnmpmoDXZoMaWj967UtM
