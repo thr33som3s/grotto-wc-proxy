@@ -3,6 +3,9 @@ name: us-results
 # Triggered by cron-job.org (every 2 minutes on election night); runnable by hand.
 # election_date can be set to a past election (e.g. 2024-11-05) to test the parser on real data.
 on:
+  # every 15 minutes (GitHub's own timer is a backup; cron-job.org triggers it reliably)
+  schedule:
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       election_date:
