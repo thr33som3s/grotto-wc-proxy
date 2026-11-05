@@ -1,6 +1,6 @@
 <style>
 #l3-page { --bg:#0a0a0a; --surface:#111; --surface2:#1a1a1a; --border:#2a2a2a; --text:#e8e8e8; --muted:#777; --accent:#c8a96e;
-  --red:#c0392b; --blue:#2e5fa8; --purple:#7d4a9e; --none:#202020; --off:#141414;
+  --red:#c0392b; --blue:#2e5fa8; --purple:#7d4a9e; --pending:#d9b520; --none:#202020; --off:#141414;
   max-width:1200px; margin:0 auto; padding:48px 20px 80px; color:var(--text); background:var(--bg); text-transform:lowercase; font-size:16px; line-height:1.6 }
 #l3-page * { box-sizing:border-box }
 .l3-head { text-align:center; border-bottom:1px solid var(--border); padding-bottom:36px; margin-bottom:28px }
@@ -121,15 +121,15 @@
   }
   function fillFor(info) {
     if (!info.race) return 'var(--off)';
-    if (view === 'us') return COLOR[info.usColor] || 'var(--none)';
+    if (view === 'us') return COLOR[info.usColor] || 'var(--pending)';
     if (view === 'grotto') return COLOR[info.gColor] || (info.demo && !info.ballot ? COLOR[info.demo.color] : '') || 'var(--none)';
     // consensus: split, grotto on the left/top, united states on the right/bottom
-    const a = info.gColor || 'none', b = info.usColor || 'none';
+    const a = info.gColor || 'none', b = info.usColor || 'pending';
     return a === b && a !== 'none' ? COLOR[a] : `url(#l3-split-${a}-${b})`;
   }
   function defs() {
-    const cs = ['red', 'blue', 'purple', 'none'];
-    const stop = (c) => c === 'none' ? 'var(--none)' : COLOR[c];
+    const cs = ['red', 'blue', 'purple', 'none', 'pending'];
+    const stop = (c) => c === 'none' ? 'var(--none)' : c === 'pending' ? 'var(--pending)' : COLOR[c];
     return '<defs>' + monoFilters() + cs.flatMap(a => cs.map(b => `<linearGradient id="l3-split-${a}-${b}" x1="0" y1="0" x2="1" y2="1"><stop offset="50%" stop-color="${stop(a)}"/><stop offset="50%" stop-color="${stop(b)}"/></linearGradient>`)).join('') + '</defs>';
   }
 
@@ -214,7 +214,7 @@
     legend(); tally(); bindTips();
   }
   function legend() {
-    const items = [['red', 'var(--red)'], ['blue', 'var(--blue)'], ['purple', 'var(--purple)'], [view === 'grotto' ? 'not yet decided' : 'not yet called', 'var(--none)'], ['no senate race', 'var(--off)']];
+    const items = [['red', 'var(--red)'], ['blue', 'var(--blue)'], ['purple', 'var(--purple)'], (view === 'grotto' ? ['not yet decided', 'var(--none)'] : ['not yet called', 'var(--pending)']), ['no senate race', 'var(--off)']];
     $('l3-legend').innerHTML = items.map(([t, c]) => `<span style="--c:${c}">${t}</span>`).join('') + (view === 'consensus' ? '<span style="--c:linear-gradient(135deg,var(--red) 50%,var(--blue) 50%)">grotto / united states</span>' : '');
   }
   function tally() {
