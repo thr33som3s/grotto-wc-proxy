@@ -370,6 +370,7 @@ function inCollection(t) {
 }
 
 function getFilteredTokens() {
+  if (typeof pickMode !== 'undefined' && pickMode === 'f13') return catalog.filter(t => f13Snap().has(t.key));
   if (typeof pickMode !== 'undefined' && pickMode) {
     return catalog.filter(t => (mine[t.key] || 0) > 0 && inPlay(t) && matchesSearch(t)
       && Object.entries(filters).every(([k, v]) => vals(t, k).includes(v)));
@@ -463,7 +464,9 @@ function renderCard(t) {
   const eds = t.burned ? 'burned' : `${n.toLocaleString()} edition${n !== 1 ? 's' : ''}`;
   const badge = qty ? `<div class="c-owned-badge">${viewed ? 'held' : 'owned'}${qty > 1 ? ' ×' + qty : ''}</div>` : '';
   let pickTag = '';
-  if (typeof pickMode !== 'undefined' && pickMode === 'votes' && vState) {
+  if (typeof pickMode !== 'undefined' && pickMode === 'f13' && f13) {
+    pickTag = `<div class="c3-picktag${f13.claimed.has(t.key) ? ' on' : ''}">${f13.claimed.has(t.key) ? 'claimed ✓' : 'click to claim'}</div>`;
+  } else if (typeof pickMode !== 'undefined' && pickMode === 'votes' && vState) {
     const vt = votingToken(t), n = vUses(t.key);
     if (vt) pickTag = `<div class="c3-picktag${n ? ' on' : ''}">${esc(n ? `${n} vote${n > 1 ? 's' : ''} in commitment` : `${vt.color} ×${vt.mult}`)}</div>`;
   } else if (typeof pickMode !== 'undefined' && pickMode && dState) {
@@ -471,7 +474,7 @@ function renderCard(t) {
     const label = pickMode === 'demo' ? (role ? `in commitment: ${role.kind} · ${role.color}` : demographicOf(t)) : (inIns ? `×${inIns.toLocaleString()} in commitment` : '');
     if (label) pickTag = `<div class="c3-picktag${role || inIns ? ' on' : ''}">${esc(label)}</div>`;
   }
-  const picked = typeof pickMode !== 'undefined' && pickMode && (pickMode === 'votes' ? (vState && vUses(t.key) > 0) : (dState && (dCardRole(t.key) || dState.inserts[t.key])));
+  const picked = typeof pickMode !== 'undefined' && pickMode && (pickMode === 'f13' ? !!(f13 && f13.claimed.has(t.key)) : pickMode === 'votes' ? (vState && vUses(t.key) > 0) : (dState && (dCardRole(t.key) || dState.inserts[t.key])));
   return `<div class="c-card${qty ? ' owned' : ''}${t.burned ? ' burned' : ''}${picked ? ' c3-picked' : ''}" data-key="${esc(t.key)}" data-clickable="true" title="${esc(t.name)}">
     <div class="c-card-img-wrap">
       ${t.img ? `<img class="c-card-img" src="${esc(t.img)}" alt="${esc(t.name)}" loading="lazy" decoding="async" onerror="this.style.display='none'">` : ''}
@@ -1136,6 +1139,14 @@ function renderPickBar() {
   let bar = document.getElementById('c3-pickbar');
   if (!pickMode) { if (bar) bar.remove(); return; }
   if (!bar) { bar = document.createElement('div'); bar.id = 'c3-pickbar'; bar.className = 'c3-pickbar'; document.body.appendChild(bar); }
+  if (pickMode === 'f13') {
+    const n = f13.claimed.size, of = f13Snap().size;
+    bar.innerHTML = `<span>click each stan piece to claim it · ${n} of ${of} claimed</span>
+      <span class="c3-actions" style="margin:0"><button class="c3-btn c3-primary" id="c3-viewcart">continue to burns</button><button class="c3-btn" id="c3-stoppick">exit</button></span>`;
+    document.getElementById('c3-viewcart').onclick = () => { pickMode = null; renderPickBar(); setView('all'); openModal(''); f13Burns(); };
+    document.getElementById('c3-stoppick').onclick = stopPick;
+    return;
+  }
   if (pickMode === 'votes') {
     const nv = vState ? vState.votes.length : 0;
     bar.innerHTML = `<span>choose your voting tokens · ${nv} vote${nv !== 1 ? 's' : ''} in your commitment</span>
@@ -1155,6 +1166,7 @@ function renderPickBar() {
 
 // Tapping a card while picking opens a small chooser instead of the details.
 function openPicker(t) {
+  if (pickMode === 'f13') { f13Toggle(t); return; }
   if (pickMode === 'votes') { openVotePicker(t); return; }
   if (pickMode === 'demo') {
     const team = demographicOf(t), cur = dCardRole(t.key);
@@ -1554,7 +1566,6 @@ const F13_INTRO = [
 ];
 const f13Head = (w) => `<h3>${F13_TITLE}</h3>${F13_INTRO.map(t => `<p>${esc(t)}</p>`).join('')}<p class="c3-note">open until ${esc(whenText(w.closes))} · holdings counted from the snapshot taken ${esc(whenText(w.snapshotAt))}${w.testMode ? ' · rehearsal mode' : ''}</p>`;
 const f13Img = (c) => (byKey.get(c.key) || {}).img || c.image || '';
-const f13Row = (c, right) => `<div class="c3-cand"><div class="c3-thumb">${f13Img(c) ? `<img src="${esc(f13Img(c))}" alt="" loading="lazy">` : ''}</div><div style="flex:1">${esc(c.name)}</div><div>${right}</div></div>`;
 async function openF13(note) {
   if (!walletAddr) {
     openModal(`<h3>${F13_TITLE}</h3><p>connect your wallet and create a profile to play.</p><div class="c3-actions"><button class="c3-btn c3-primary" id="c3-connect">connect wallet</button></div>`);
@@ -1581,32 +1592,61 @@ async function openF13(note) {
   if (!info.window.open) { modalBody(head + `<p>${info.window.closed ? 'the 3v3nt has closed.' : 'the 3v3nt is not open yet.'}</p>`); return; }
   f13Entry(head, info);
 }
+// The entry, like demographics: the claim pieces are picked from the main grid (only the pieces this wallet held
+// at the snapshot, each tapped to claim), then the 3v3nt window takes the burns, the review and the signature.
+let f13 = null;   // { info, head, claimed: Set, burns: { key: qty } } while an entry is being made
 function f13Entry(head, info) {
+  if (!f13 || f13.wallet !== walletAddr) f13 = { wallet: walletAddr, claimed: new Set(), burns: {} };
+  f13.info = info; f13.head = head;
+  const holds = info.snapshotHolds || [];
+  if (!holds.length) { f13Burns('your wallet held none of the qualifying stan pieces at the snapshot, so there is nothing to claim by holding. you can still burn below.'); return; }
+  modalBody(head + `<div class="c3-counter">you held ${holds.length} qualifying stan piece${holds.length !== 1 ? 's' : ''} at the snapshot</div>
+    <p>click each one to claim it (1 claim per piece). then come back here to choose your burns.</p>
+    <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-f13pick">claim your stan pieces</button>${f13.claimed.size ? '<button class="c3-btn" id="c3-f13burns">go to burns</button>' : ''}</div><p class="c3-msg" id="c3-msg"></p>`);
+  document.getElementById('c3-f13pick').onclick = () => startPick('f13');
+  const gb = document.getElementById('c3-f13burns'); if (gb) gb.onclick = () => f13Burns();
+}
+const f13Snap = () => new Set((f13 && f13.info && f13.info.snapshotHolds) || []);
+function f13Toggle(t) {
+  if (!f13Snap().has(t.key)) return;
+  if (f13.claimed.has(t.key)) f13.claimed.delete(t.key); else f13.claimed.add(t.key);
+  renderPickBar(); vsRender(false, true);
+}
+function f13Burns(note) {
+  const { info, head } = f13;
   const card = Object.fromEntries([...info.hold, ...info.burn].map(c => [c.key, c]));
   const holds = info.snapshotHolds || [];
   const burnable = info.burnable || {};
   const bkeys = info.burn.map(c => c.key).filter(k => burnable[k] > 0);
-  const holdHtml = holds.length
-    ? holds.map(k => f13Row(card[k], `<label class="c3-note"><input type="checkbox" data-f13hold="${esc(k)}" checked> cite</label>`)).join('')
-    : '<p class="c3-note">your wallet held none of the qualifying tokens at the snapshot.</p>';
+  const claimedHtml = holds.length
+    ? `<p class="c3-h4">stan pieces claimed: ${f13.claimed.size} of ${holds.length} <button class="c3-link" id="c3-f13back">${f13.claimed.size < holds.length ? 'claim more' : 'change'}</button></p>`
+    : '';
   const burnHtml = bkeys.length
-    ? bkeys.map(k => f13Row(card[k], `<div class="c3-qty"><input type="number" min="0" max="${burnable[k]}" value="0" data-f13burn="${esc(k)}"><span class="c3-note">of ${burnable[k]}</span></div>`)).join('')
+    ? `<div class="c3-f13grid">${bkeys.map(k => `<div class="c3-f13card">${f13Img(card[k]) ? `<img src="${esc(f13Img(card[k]))}" alt="" loading="lazy">` : ''}<div>${esc(card[k].name)}</div>
+        <div class="c3-qty"><button class="c3-btn" data-f13minus="${esc(k)}">−</button><input type="number" min="0" max="${burnable[k]}" value="${f13.burns[k] || 0}" data-f13burn="${esc(k)}"><button class="c3-btn" data-f13plus="${esc(k)}">+</button></div>
+        <div class="c3-note">you hold ${burnable[k]}</div></div>`).join('')}</div>`
     : '<p class="c3-note">your wallet holds none of the burnable tokens.</p>';
-  modalBody(head + `<p class="c3-h4">tokens you held at the snapshot (1 claim each)</p><div class="c3-cands">${holdHtml}</div>
-    <p class="c3-h4">tokens you can burn (1 claim per edition)</p><div class="c3-cands">${burnHtml}</div>
+  modalBody(head + (note ? `<p class="c3-msg">${esc(note)}</p>` : '') + claimedHtml
+    + `<p class="c3-h4">tokens you can burn (1 claim per edition burned)</p>${burnHtml}
     <div class="c3-counter" id="c3-f13total"></div>
     <p class="c3-note">your entry is final once signed. burns are sent to 333burn right after, and count only once they arrive before the close.</p>
     <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-review">review entry</button></div><p class="c3-msg" id="c3-msg"></p>`);
-  const read = () => ({
-    holds: [...document.querySelectorAll('[data-f13hold]')].filter(x => x.checked).map(x => x.dataset.f13hold),
-    burns: [...document.querySelectorAll('[data-f13burn]')].map(x => ({ key: x.dataset.f13burn, qty: Math.max(0, Math.min(Number(x.max), Math.floor(Number(x.value) || 0))) })).filter(b => b.qty > 0),
-  });
-  const total = () => { const p = read(); const n = p.holds.length + p.burns.reduce((a, b) => a + b.qty, 0); document.getElementById('c3-f13total').textContent = `claims: ${n}`; };
-  document.querySelectorAll('[data-f13hold],[data-f13burn]').forEach(x => x.addEventListener('input', total));
+  const bk = document.getElementById('c3-f13back'); if (bk) bk.onclick = () => startPick('f13');
+  const clamp = (x) => Math.max(0, Math.min(Number(x.max), Math.floor(Number(x.value) || 0)));
+  const total = () => {
+    document.querySelectorAll('[data-f13burn]').forEach(x => { f13.burns[x.dataset.f13burn] = clamp(x); });
+    const n = f13.claimed.size + Object.values(f13.burns).reduce((a, q) => a + q, 0);
+    document.getElementById('c3-f13total').textContent = `claims: ${n}`;
+  };
+  const step = (k, d) => { const x = document.querySelector(`[data-f13burn="${k}"]`); x.value = clamp({ max: x.max, value: (Number(x.value) || 0) + d }); total(); };
+  document.querySelectorAll('[data-f13burn]').forEach(x => x.addEventListener('input', total));
+  document.querySelectorAll('[data-f13plus]').forEach(b => b.onclick = () => step(b.dataset.f13plus, 1));
+  document.querySelectorAll('[data-f13minus]').forEach(b => b.onclick = () => step(b.dataset.f13minus, -1));
   total();
   document.getElementById('c3-review').onclick = async () => {
-    const payload = read();
-    if (!payload.holds.length && !payload.burns.length) { modalMsg('cite a token you held or choose something to burn.'); return; }
+    total();
+    const payload = { holds: holds.filter(k => f13.claimed.has(k)), burns: bkeys.map(k => ({ key: k, qty: f13.burns[k] || 0 })).filter(b => b.qty > 0) };
+    if (!payload.holds.length && !payload.burns.length) { modalMsg(holds.length ? 'claim a stan piece or choose something to burn.' : 'choose something to burn.'); return; }
     modalMsg('checking your entry...');
     let prep;
     try { prep = await api('/commit', { method: 'POST', auth: true, body: { phase: 'f13', ...payload } }); }
@@ -1615,12 +1655,13 @@ function f13Entry(head, info) {
       ...payload.burns.map(b => `<div class="c3-entry-row"><span>${esc(card[b.key].name)}</span><span>burn ×${b.qty} · ${b.qty} claim${b.qty !== 1 ? 's' : ''}</span></div>`)].join('');
     modalBody(head + `<p>review your entry. signing submits it, and it cannot be changed.</p><div class="c3-entry">${rows}</div><div class="c3-counter">claims: ${prep.claims}</div>
       <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-submit">sign and submit</button><button class="c3-btn" id="c3-back">go back</button></div><p class="c3-msg" id="c3-msg"></p>`);
-    document.getElementById('c3-back').onclick = () => f13Entry(head, info);
+    document.getElementById('c3-back').onclick = () => f13Burns();
     document.getElementById('c3-submit').onclick = async () => {
       modalMsg('check your wallet to sign...');
       try {
         const signature = await provider.getSigner().signMessage(prep.message);
         await api('/commit', { method: 'POST', auth: true, body: { phase: 'f13', ...payload, issuedAt: prep.issuedAt, signature } });
+        f13 = null;
         openF13(payload.burns.length ? 'submitted. now send your burns to 333burn below.' : 'submitted. your entry is final.');
       } catch (e) { modalMsg(e.code === 4001 || /reject|denied/i.test(e.message) ? 'signature cancelled. nothing was submitted.' : e.message); }
     };
@@ -1689,6 +1730,7 @@ function addPlayerUi() {
   .c3-modal-box select{font:inherit;font-size:14px;background:var(--surface2);color:var(--text);border:1px solid var(--border2);padding:5px;max-width:100%}
   .c3-step{border:1px solid var(--border2);padding:10px 12px;margin:10px 0;display:flex;flex-direction:column;gap:8px}.c3-modal-box a{color:var(--accent)}
   .c3-pledge{margin:16px 0;padding:12px 14px;border:1px solid var(--accent);background:var(--accent-dim);color:var(--accent);font-size:13px;line-height:1.5;letter-spacing:.04em;font-weight:600;text-transform:none !important}
+  .c3-f13grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.c3-f13card{border:1px solid var(--border2);padding:8px;display:flex;flex-direction:column;gap:6px;font-size:13px}.c3-f13card img{width:100%;aspect-ratio:5/7;object-fit:contain;background:var(--surface2)}.c3-f13card .c3-qty input{width:52px;text-align:center}
   .c3-entry{border:1px solid var(--border2)}.c3-entry-row{display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border)}`;
   document.head.appendChild(st);
   const bar = document.querySelector('.c-view-bar');
