@@ -409,11 +409,9 @@ function renderGrid() {
     grid.innerHTML = '<div class="c-empty" style="grid-column:1/-1">' + msg + '</div>';
     grid.style.minHeight = ''; grid.style.paddingTop = ''; grid.style.paddingBottom = '';
     vsLastRange = '';
-    if (typeof pickMode !== 'undefined' && pickMode === 'build') renderPickBar();
     return;
   }
   vsRender(false, true);
-  if (typeof pickMode !== 'undefined' && pickMode === 'build') renderPickBar();   // keeps "add all N results" current as the search changes
 }
 // Draws only the cards near the screen. Cards already on screen are kept as they are (never rebuilt),
 // so their images don't reload or flicker; only cards entering or leaving the drawn range change.
@@ -1153,8 +1151,7 @@ function renderPickBar() {
   if (!bar) { bar = document.createElement('div'); bar.id = 'c3-pickbar'; bar.className = 'c3-pickbar'; document.body.appendChild(bar); }
   if (pickMode === 'build') {
     bar.innerHTML = `<span>build3r · ${esc(b3.name || b3.id)} · ${b3.tokens.length} token${b3.tokens.length !== 1 ? 's' : ''} added · search, then click cards to add or remove <span id="c3-pickflash"></span></span>
-      <span class="c3-actions" style="margin:0"><button class="c3-btn" id="c3-b3addall">add all ${vsTokens.length} results</button><button class="c3-btn c3-primary" id="c3-viewcart">open 3v3nt</button><button class="c3-btn" id="c3-stoppick">exit</button></span>`;
-    document.getElementById('c3-b3addall').onclick = () => { const n = b3AddAll(); flashPickBar(`added ${n}.`); };
+      <span class="c3-actions" style="margin:0"><button class="c3-btn c3-primary" id="c3-viewcart">open 3v3nt</button><button class="c3-btn" id="c3-stoppick">exit</button></span>`;
     document.getElementById('c3-viewcart').onclick = () => { pickMode = null; renderPickBar(); setView('all'); openModal(''); b3Window(); };
     document.getElementById('c3-stoppick').onclick = stopPick;
     return;
@@ -1846,7 +1843,7 @@ function evStatus(head, info) {
 }
 
 // ── BUILD3R (thr33s's wallet only) ────────────────────────────────
-// Search the whole universe in the grid, click cards to add them to the 3v3nt, then assign each a role
+// Search the whole universe in the grid, click each card to add it to the 3v3nt (one at a time, by choice), then assign each a role
 // (holder, burn, vault, cite) on the role pages. Saved and published through the proxy.
 const ARTIST_WALLET = '0xfe917312344b4ed3283c5e142868cd3eaa782933';
 let b3 = null;   // the config being built
@@ -1957,13 +1954,6 @@ function b3Toggle(t) {
   const i = b3.tokens.findIndex(x => x.key === t.key);
   if (i >= 0) b3.tokens.splice(i, 1); else b3.tokens.push({ key: t.key, role: null });
   b3Stash(); renderPickBar(); vsRender(false, true);
-}
-function b3AddAll() {
-  const have = new Set(b3.tokens.map(t => t.key));
-  let n = 0;
-  for (const t of getFilteredTokens()) if (!have.has(t.key)) { b3.tokens.push({ key: t.key, role: null }); n++; }
-  b3Stash(); renderPickBar(); vsRender(false, true);
-  return n;
 }
 
 // thr33s's pledge, shown in capitals wherever a collector commits or reviews their candidates.
