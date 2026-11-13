@@ -1,3 +1,4 @@
+// Page test (jsdom). Run from a folder with jsdom installed: npm i jsdom@24, then node <this file>.
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import assert from "assert/strict";

@@ -8,6 +8,7 @@ import { store } from "./_lib/store.js";
 import { readHoldings, readTransfers, readUsResults, readSnapshot } from "./_lib/ledger.js";
 import { F13, F13_HOLD, F13_BURN, f13Collections, f13Window, snapshotHolds, checkF13, f13Claims, f13Confirmed, f13Message } from "./_lib/f13.js";
 import { tally } from "./_lib/tally.js";
+import { cleanEvent, roleKeys, eventCollections, eventWindow, heldIn, cleanPayload, checkEntry, entryClaims, moves, confirmedClaims, entryMessage } from "./_lib/events.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
   univ3rs3Tokens, collectionTokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, candidateRaces, shortName,
@@ -22,6 +23,7 @@ export default async function handler(req, res) {
   const wallet = walletFromReq(req);
   const phase = String((req.method === "GET" ? req.query.phase : body(req).phase) || "");
   if (req.method === "GET" && phase === "map") return map(res, KEY, wallet);
+  if (phase === "events" || phase === "build3r" || phase === "event") { try { return await events(req, res, phase, wallet, KEY); } catch (e) { return res.status(502).json({ error: e.message }); } }
   if (phase === "f13") { try { return await f13(req, res, wallet, KEY); } catch (e) { return res.status(502).json({ error: e.message }); } }
   const win = windowState(phase, Date.now(), wallet);
   if (!win) return res.status(400).json({ error: "unknown phase" });
@@ -272,6 +274,90 @@ async function f13(req, res, wallet, KEY) {
   const age = Date.now() - Date.parse(b.issuedAt);
   if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
   const message = f13Message(wallet, payload, names, b.issuedAt);
+  if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
+  const r = await store("put_commitment", { phase: stored, wallet, username: profile.username, payload, signature: b.signature, message, index: null });
+  if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your entry; it is final" : r.error });
+  return res.status(201).json({ ok: true, submitted_at: r.submitted_at, payload });
+}
+
+// ── 3v3nts built in build3r (api/_lib/events.js) ─────────────────
+// GET  ?phase=events                 -> published 3v3nts { id, name, window } (thr33s: every 3v3nt, drafts too, with configs)
+// GET  ?phase=build3r&id=            -> one config (thr33s only)
+// POST { phase: "build3r", config }  -> saves a draft or publishes (thr33s only)
+// GET  ?phase=event&id=              -> the 3v3nt for players: config, token names and images, window; signed in: holdings, entry, arrivals
+// POST { phase: "event", id, hold, burn, vault, cite } -> text to sign; with issuedAt + signature -> stored, final
+const parseEvent = (row) => { try { return typeof row.config === "string" ? JSON.parse(row.config) : row.config; } catch { return null; } };
+async function loadEvent(id) { const r = await store("get_event", { id }); return r.event ? parseEvent(r.event) : null; }
+async function events(req, res, phase, wallet, KEY) {
+  const isArtist = wallet === ARTIST_WALLET;
+  res.setHeader("Cache-Control", "private, no-store");
+  if (phase === "events") {
+    const { events: rows = [] } = await store("list_events", {});
+    const list = rows.map(parseEvent).filter(Boolean);
+    if (isArtist && req.query.all) return res.status(200).json({ events: list });
+    return res.status(200).json({ events: list.filter((c) => c.status === "published").map((c) => ({ id: c.id, name: c.name, window: eventWindow(c, Date.now(), TEST_MODE) })) });
+  }
+  if (phase === "build3r") {
+    if (!isArtist) return res.status(403).json({ error: "build3r is for thr33s" });
+    if (req.method === "GET") { const c = await loadEvent(String(req.query.id || "")); return c ? res.status(200).json({ config: c }) : res.status(404).json({ error: "no such 3v3nt" }); }
+    if (req.method !== "POST") return res.status(405).json({ error: "GET or POST" });
+    const { config, problems } = cleanEvent(body(req).config);
+    if (problems.length) return res.status(422).json({ error: problems[0], problems, config });
+    const r = await store("put_event", { id: config.id, status: config.status, config: JSON.stringify(config), by: wallet });
+    if (r.ok === false) return res.status(409).json({ error: r.error });
+    return res.status(200).json({ ok: true, config, updated_at: r.updated_at });
+  }
+  // phase === "event": the player side
+  const id = String((req.method === "GET" ? req.query.id : body(req).id) || "");
+  const cfg = await loadEvent(id);
+  if (!cfg || (cfg.status !== "published" && !isArtist && !TEST_MODE)) return res.status(404).json({ error: "no such 3v3nt" });
+  const win = eventWindow(cfg, Date.now(), TEST_MODE);
+  const stored = storedPhase(`event:${cfg.id}`);
+  const lists = await Promise.all(eventCollections(cfg).map((c) => collectionTokens(KEY, c).catch(() => [])));
+  const all = new Map(lists.flat().map((t) => [t.key, t]));
+  const card = (k) => { const t = all.get(k); return { key: k, name: t ? t.name : k, image: t ? t.image || "" : "" }; };
+  const holdRows = async () => cfg.roles.hold.count === "snapshot" ? readSnapshot(cfg.snapshot.tab, KEY) : readHoldings(KEY);
+  if (req.method === "GET") {
+    const out = { id: cfg.id, name: cfg.name, intro: cfg.intro, window: win, roles: cfg.roles,
+      tokens: Object.fromEntries(["hold", "burn", "vault", "cite"].map((r) => [r, roleKeys(cfg, r).map(card)])) };
+    if (wallet) {
+      const needHold = roleKeys(cfg, "hold").length > 0;
+      const [hrows, holdings, mine] = await Promise.all([needHold ? holdRows() : [], readHoldings(KEY), store("get_commitment", { phase: stored, wallet })]);
+      out.held = heldIn(cfg, hrows, wallet);
+      const movable = new Set([...roleKeys(cfg, "burn"), ...roleKeys(cfg, "vault")]);
+      out.balances = Object.fromEntries(holdings.filter((h) => h.wallet === wallet && movable.has(h.key) && h.balance > 0).map((h) => [h.key, h.balance]));
+      out.entry = mine.commitment || null;
+      if (out.entry) {
+        const from = TEST_MODE ? Date.parse(out.entry.submitted_at) : Date.parse(cfg.window.opens);
+        const sent = sentTo(moves(out.entry.payload), wallet, await readTransfers(KEY), from, TEST_MODE ? Infinity : Date.parse(cfg.window.closes));
+        out.sent = Object.fromEntries(Object.entries(sent).map(([k, v]) => [k, v.sent]));
+        out.confirmed = confirmedClaims(cfg, out.entry.payload, sent);
+      }
+    }
+    return res.status(200).json(out);
+  }
+  if (req.method !== "POST") return res.status(405).json({ error: "GET or POST" });
+  if (!wallet) return res.status(401).json({ error: "sign in first" });
+  if (!win.open) return res.status(403).json({ error: `${cfg.name} is not open` });
+  const { profile } = await store("get_profile", { wallet });
+  if (!profile) return res.status(403).json({ error: "create a profile first" });
+  const existing = (await store("get_commitment", { phase: stored, wallet })).commitment;
+  if (existing) return res.status(409).json({ error: "you already submitted your entry; it is final", entry: existing });
+  const b = body(req);
+  const payload = cleanPayload(b);
+  const [hrows, holdings] = await Promise.all([payload.hold.length ? holdRows() : [], readHoldings(KEY)]);
+  const held = TEST_MODE ? new Set(roleKeys(cfg, "hold")) : new Set(heldIn(cfg, hrows, wallet));
+  const live = TEST_MODE ? { get: () => 999 } : new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
+  const problems = checkEntry(cfg, payload, held, live);
+  if (problems.length) return res.status(422).json({ error: problems[0], problems });
+  const names = Object.fromEntries([...payload.hold, ...payload.cite, ...payload.burn.map((x) => x.key), ...payload.vault.map((x) => x.key)].map((k) => [k, card(k).name]));
+  if (!b.signature) {
+    const issuedAt = new Date().toISOString();
+    return res.status(200).json({ issuedAt, message: entryMessage(cfg, wallet, payload, names, issuedAt), claims: entryClaims(cfg, payload) });
+  }
+  const age = Date.now() - Date.parse(b.issuedAt);
+  if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
+  const message = entryMessage(cfg, wallet, payload, names, b.issuedAt);
   if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
   const r = await store("put_commitment", { phase: stored, wallet, username: profile.username, payload, signature: b.signature, message, index: null });
   if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your entry; it is final" : r.error });
