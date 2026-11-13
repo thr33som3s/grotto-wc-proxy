@@ -1,8 +1,9 @@
 <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
 <script>
-// CONN3CT v52. Page Header Code Injection for thr33som3s.com/conn3ct. Pairs with code block v3.
+// CONN3CT v53. Page Header Code Injection for thr33som3s.com/conn3ct. Pairs with code block v3.
 // v51: the friday the 13th 3v3nt (Fri Nov 13, 2026 until 11:59pm PST).
-// v52: build3r (thr33s only: search, click to add, role pages, save and publish) and 3v3nts run from build3r configs.
+// v52: on phones the view buttons stack vertically.
+// v53: build3r (thr33s only: search, click to add, role pages, save and publish) and 3v3nts run from build3r configs.
 // Adds profiles, sign-in, the 3l3ction candidacy screen, and opening the page inside wallet apps on phones.
 // All data comes from the proxy: /api/catalog (metadata, families, editions), /api/holdings
 // (any wallet's balances) and /api/holders (who holds a piece). Those read the ledger, which
@@ -2035,7 +2036,14 @@ function addPlayerUi() {
   .c3-lbadd{display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--accent);padding:8px 10px;font-size:14px}.c3-b3row{display:flex;gap:12px;flex-wrap:wrap}.c3-b3row .c3-field{flex:1;min-width:180px}
   .c3-b3tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}.c3-b3tile{display:flex;flex-direction:column;gap:2px;align-items:center}.c3-b3tile strong{font-size:22px;font-weight:300}
   .c3-modal-box textarea{font:inherit;font-size:15px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:8px 10px;text-transform:none}
-  .c3-entry{border:1px solid var(--border2)}.c3-entry-row{display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border)}`;
+  .c3-entry{border:1px solid var(--border2)}
+  /* v52: phones. The view bar's buttons stack, full width, so none sits off screen. The bar's own styles live in
+     the code block, so these rules are written to win over them on small screens only. */
+  @media (max-width: 700px) {
+    body .c-view-bar{display:flex !important;flex-direction:column !important;flex-wrap:nowrap !important;align-items:stretch !important;overflow:visible !important;white-space:normal !important;width:100% !important;max-width:100% !important;gap:6px !important;height:auto !important}
+    body .c-view-bar .c-view-btn{display:block !important;width:100% !important;max-width:100% !important;margin:0 !important;text-align:left !important;white-space:normal !important;flex:0 0 auto !important}
+  }
+.c3-entry-row{display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border)}`;
   document.head.appendChild(st);
   const bar = document.querySelector('.c-view-bar');
   if (bar && !document.getElementById('view-l3ction')) {
