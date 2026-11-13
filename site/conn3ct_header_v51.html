@@ -1550,7 +1550,7 @@ const F13_INTRO = [
   "You will conn3ct to claim your free mints of a new painting that does Stan Thomas justice on his special day.    Holders of Stan pieces will be able to claim 1 new mint for each unique qualifying Stan Thomas/Johnson painting they hold.   And, anyone can burn Stan G3lt and Stan Matchmakers 1:1 for the new piece.",
   "While we're righting wrongs, we can't ignore the fact that Decorative Gourd Season fell right in the middle of the 3l3ction.   So, let's honor Shayna, too.   Qualifying Shayna Twitchell tokens can be burned 1:1 for the new Stan mint, too.",
   "Oh... and the best way to show Stan how important this mini 3v3nt is.... the new Stan Thomas paintings are S14 BASE CARDS and are ONLY available today -- to those who get it together.",
-  "3v3nt closes at 11:59pm PDT.",
+  "3v3nt closes at 11:59pm PST.",
 ];
 const f13Head = (w) => `<h3>${F13_TITLE}</h3>${F13_INTRO.map(t => `<p>${esc(t)}</p>`).join('')}<p class="c3-note">open until ${esc(whenText(w.closes))} · holdings counted from the snapshot taken ${esc(whenText(w.snapshotAt))}${w.testMode ? ' · rehearsal mode' : ''}</p>`;
 const f13Img = (c) => (byKey.get(c.key) || {}).img || c.image || '';
