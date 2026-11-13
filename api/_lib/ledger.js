@@ -67,3 +67,8 @@ export async function readUsResults(key) {
     return out;
   } catch { return {}; }
 }
+
+// A frozen copy of the holdings tab, taken for one 3v3nt (e.g. "snapshot-f13"). Same columns as holdings.
+export async function readSnapshot(name, key) {
+  return (await tab(name, "D", key)).map(([coll, id, wallet, balance]) => ({ key: tokenKey(coll, id), coll, id, wallet: String(wallet).toLowerCase(), balance: +balance }));
+}

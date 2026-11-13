@@ -5,7 +5,8 @@
 // Entries for candidacy: [{ race: "KY", candidate: "univ3rs3:10001" }, ...]
 // Demographics: { demographics: [{ kind: free|added|straddle, card?, team?, color, tiers, races }], inserts: [{ key, qty }] }
 import { store } from "./_lib/store.js";
-import { readHoldings, readTransfers, readUsResults } from "./_lib/ledger.js";
+import { readHoldings, readTransfers, readUsResults, readSnapshot } from "./_lib/ledger.js";
+import { F13, F13_HOLD, F13_BURN, f13Collections, f13Window, snapshotHolds, checkF13, f13Claims, f13Confirmed, f13Message } from "./_lib/f13.js";
 import { tally } from "./_lib/tally.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
@@ -21,6 +22,7 @@ export default async function handler(req, res) {
   const wallet = walletFromReq(req);
   const phase = String((req.method === "GET" ? req.query.phase : body(req).phase) || "");
   if (req.method === "GET" && phase === "map") return map(res, KEY, wallet);
+  if (phase === "f13") { try { return await f13(req, res, wallet, KEY); } catch (e) { return res.status(502).json({ error: e.message }); } }
   const win = windowState(phase, Date.now(), wallet);
   if (!win) return res.status(400).json({ error: "unknown phase" });
   try {
@@ -215,4 +217,63 @@ export function checkCandidacy(entries, wallet, pool, holdings, { skipHolding = 
     races.add(e.race); cands.add(e.candidate);
   }
   return out;
+}
+
+// ── Friday the 13th 3v3nt (api/_lib/f13.js) ──────────────────────
+// GET: the qualifying tokens (names, images), the window, and for a signed-in collector: what they held at the
+// snapshot, their burnable balances now, their entry, and how much of each committed burn has reached 333burn.
+// POST: { phase: "f13", holds: [key], burns: [{ key, qty }] } -> text to sign; with issuedAt + signature -> stored, final.
+async function f13(req, res, wallet, KEY) {
+  const win = f13Window(Date.now(), TEST_MODE);
+  const stored = storedPhase("f13");
+  const lists = await Promise.all(f13Collections().map((c) => collectionTokens(KEY, c).catch(() => [])));
+  const all = new Map(lists.flat().map((t) => [t.key, t]));
+  const card = (k) => { const t = all.get(k); return { key: k, name: t ? t.name : k, image: t ? t.image || "" : "" }; };
+  if (req.method === "GET") {
+    res.setHeader("Cache-Control", "private, no-store");
+    const out = { phase: "f13", window: win, hold: F13_HOLD.map(card), burn: F13_BURN.map(card) };
+    if (wallet) {
+      const [snap, holdings, mine] = await Promise.all([readSnapshot(F13.snapshotTab, KEY), readHoldings(KEY), store("get_commitment", { phase: stored, wallet })]);
+      out.snapshotHolds = snapshotHolds(snap, wallet);
+      out.burnable = Object.fromEntries(holdings.filter((h) => h.wallet === wallet && F13_BURN.includes(h.key) && h.balance > 0).map((h) => [h.key, h.balance]));
+      out.entry = mine.commitment || null;
+      if (out.entry) {
+        const items = (out.entry.payload.burns || []).map((b) => ({ key: b.key, dest: "333burn", qty: Number(b.qty) }));
+        const from = TEST_MODE ? Date.parse(out.entry.submitted_at) : Date.parse(F13.opens);
+        const sent = sentTo(items, wallet, await readTransfers(KEY), from, TEST_MODE ? Infinity : Date.parse(F13.closes));
+        out.sent = Object.fromEntries(Object.entries(sent).map(([k, v]) => [k, v.sent]));
+        out.confirmed = f13Confirmed(out.entry.payload, sent);
+      }
+    }
+    return res.status(200).json(out);
+  }
+  if (req.method !== "POST") return res.status(405).json({ error: "GET or POST" });
+  if (!wallet) return res.status(401).json({ error: "sign in first" });
+  if (!win.open) return res.status(403).json({ error: "the friday the 13th 3v3nt is not open" });
+  const { profile } = await store("get_profile", { wallet });
+  if (!profile) return res.status(403).json({ error: "create a profile first" });
+  const existing = (await store("get_commitment", { phase: stored, wallet })).commitment;
+  if (existing) return res.status(409).json({ error: "you already submitted your entry; it is final", entry: existing });
+  const b = body(req);
+  const payload = {
+    holds: (Array.isArray(b.holds) ? b.holds : []).map(String),
+    burns: (Array.isArray(b.burns) ? b.burns : []).filter((x) => Number(x.qty) > 0).map((x) => ({ key: String(x.key), qty: Number(x.qty) })),
+  };
+  const [snap, holdings] = await Promise.all([readSnapshot(F13.snapshotTab, KEY), readHoldings(KEY)]);
+  const snapHeld = TEST_MODE ? new Set(F13_HOLD) : new Set(snapshotHolds(snap, wallet));
+  const live = TEST_MODE ? { get: () => 999 } : new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
+  const problems = checkF13(payload, snapHeld, live);
+  if (problems.length) return res.status(422).json({ error: problems[0], problems });
+  const names = Object.fromEntries([...payload.holds, ...payload.burns.map((x) => x.key)].map((k) => [k, card(k).name]));
+  if (!b.signature) {
+    const issuedAt = new Date().toISOString();
+    return res.status(200).json({ issuedAt, message: f13Message(wallet, payload, names, issuedAt), claims: f13Claims(payload) });
+  }
+  const age = Date.now() - Date.parse(b.issuedAt);
+  if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
+  const message = f13Message(wallet, payload, names, b.issuedAt);
+  if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
+  const r = await store("put_commitment", { phase: stored, wallet, username: profile.username, payload, signature: b.signature, message, index: null });
+  if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your entry; it is final" : r.error });
+  return res.status(201).json({ ok: true, submitted_at: r.submitted_at, payload });
 }
