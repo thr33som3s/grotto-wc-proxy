@@ -187,6 +187,7 @@ function disconnect() {
 
 // View any collector's wallet. The "mine" view and owned badges follow the viewed wallet.
 async function viewWallet(w) {
+  if (typeof pickMode !== 'undefined' && pickMode) return;   // picking: stay where you are
   w = (w || '').trim().toLowerCase();
   if (!isAddr(w)) { flashViewing(Object.keys(names).length ? 'no collector by that username or wallet' : 'that is not a wallet address'); return; }
   if (w === walletAddr) { stopViewing(); return; }
@@ -488,7 +489,7 @@ function renderCard(t) {
     <div class="c-card-img-wrap">
       ${t.img ? `<img class="c-card-img" src="${esc(t.img)}" alt="${esc(t.name)}" loading="lazy" decoding="async" onerror="this.style.display='none'">` : ''}
       ${t.burned ? '<div class="c-burned-overlay">🔥</div>' : ''}
-      ${badge}${pickTag}
+      ${badge}${typeof pickMode !== 'undefined' && pickMode ? `<div class="c3-pickfoot">${pickTag}<button type="button" class="c3-detail" data-details="1">details</button></div>` : pickTag}
     </div>
     <div class="c-card-body"><div class="c-card-meta">${eds}</div></div>
   </div>`;
@@ -522,7 +523,7 @@ function openLightbox(el) {
   const e = t.editions;
   const row = (k, v) => `<div class="c-lb-row"><div class="c-lb-row-key">${k}</div><div class="c-lb-row-val">${v}</div></div>`;
 
-  document.getElementById('lb-data').innerHTML = `
+  document.getElementById('lb-data').innerHTML = `${lbBuildHtml(t)}
     <div><div class="c-lb-collection">${esc(t.collection)}</div><div class="c-lb-name">${esc(t.name)}</div></div>
     ${ownedHtml}
     <div class="c-lb-desc" id="lb-desc"></div>
@@ -588,6 +589,7 @@ async function loadHolders(t) {
 // From a trait in the lightbox: show every piece in the universe with that trait.
 // Clears other filters and the search, switches to all collections and the full collection view.
 function showTrait(k, v) {
+  if (typeof pickMode !== 'undefined' && pickMode) return;   // picking: stay where you are
   filters = { [k]: v };
   document.querySelectorAll('.c-filter-select').forEach(s => { s.value = s.dataset.filterKey === k ? v : ''; });
   searchQ = ''; searchRe = null;
@@ -625,6 +627,18 @@ async function loadActivity(t, shown = 25) {
     ${all.length > shown ? `<button type="button" class="c-lb-link" id="lb-activity-more" style="cursor:pointer;background:none;margin-top:8px">show ${Math.min(25, all.length - shown)} more</button>` : ''}`;
   const more = document.getElementById('lb-activity-more'); if (more) more.onclick = () => loadActivity(t, shown + 25);
 }
+// While building, the expansion carries the same add/remove as the card, so a piece can be judged and chosen in one place.
+function lbBuildHtml(t) {
+  if (typeof pickMode === 'undefined' || pickMode !== 'build' || !b3) return '';
+  const r = b3Role(t.key);
+  return `<div class="c3-lbadd"><span>${r ? (r === 'unassigned' ? 'in this 3v3nt' : `in this 3v3nt · ${EV_LABEL[r]}`) : 'not in this 3v3nt'}</span><button type="button" class="c3-btn c3-primary" data-lbadd="${esc(t.key)}">${r ? 'remove' : 'add to 3v3nt'}</button></div>`;
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-lbadd]'); if (!b || !b3) return;
+  const t = byKey.get(b.dataset.lbadd); if (!t) return;
+  b3Toggle(t);
+  b.parentElement.outerHTML = lbBuildHtml(t);
+});
 function closeLightbox() {
   const lb = document.getElementById('c-lb'); if (lb) lb.classList.remove('open');
   document.body.style.overflow = '';
@@ -2004,7 +2018,8 @@ function addPlayerUi() {
   .c3-step{border:1px solid var(--border2);padding:10px 12px;margin:10px 0;display:flex;flex-direction:column;gap:8px}.c3-modal-box a{color:var(--accent)}
   .c3-pledge{margin:16px 0;padding:12px 14px;border:1px solid var(--accent);background:var(--accent-dim);color:var(--accent);font-size:13px;line-height:1.5;letter-spacing:.04em;font-weight:600;text-transform:none !important}
   .c3-f13grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.c3-f13card{border:1px solid var(--border2);padding:8px;display:flex;flex-direction:column;gap:6px;font-size:13px}.c3-f13card img{width:100%;aspect-ratio:5/7;object-fit:contain;background:var(--surface2)}.c3-f13card .c3-qty input{width:52px;text-align:center}
-  .c3-modal.c3-wide .c3-modal-box{max-width:960px}.c3-b3row{display:flex;gap:12px;flex-wrap:wrap}.c3-b3row .c3-field{flex:1;min-width:180px}
+  .c3-modal.c3-wide .c3-modal-box{max-width:960px}.c3-pickfoot{position:absolute;left:6px;right:6px;bottom:6px;display:flex;gap:4px;align-items:stretch;z-index:2}.c3-pickfoot .c3-picktag{position:static;flex:1}.c3-detail{flex-shrink:0;font:inherit;font-size:11px;text-transform:lowercase;background:rgba(0,0,0,.8);color:var(--text);border:1px solid var(--border2);padding:2px 7px;cursor:pointer}.c3-detail:hover{border-color:var(--accent);color:var(--accent)}
+  .c3-lbadd{display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--accent);padding:8px 10px;font-size:14px}.c3-b3row{display:flex;gap:12px;flex-wrap:wrap}.c3-b3row .c3-field{flex:1;min-width:180px}
   .c3-b3tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}.c3-b3tile{display:flex;flex-direction:column;gap:2px;align-items:center}.c3-b3tile strong{font-size:22px;font-weight:300}
   .c3-modal-box textarea{font:inherit;font-size:15px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:8px 10px;text-transform:none}
   .c3-entry{border:1px solid var(--border2)}.c3-entry-row{display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border)}`;
@@ -2061,6 +2076,7 @@ function initApp() {
   on('lb-close', 'click', closeLightbox);
   on('c-lb', 'click', function (e) { if (e.target === this) closeLightbox(); });
   on('c-grid', 'click', e => { const card = e.target.closest('[data-clickable]'); if (!card) return;
+    if (e.target.closest('[data-details]')) { openLightbox(card); return; }   // while picking: look, then close and carry on
     if (typeof pickMode !== 'undefined' && pickMode) { const t = byKey.get(card.dataset.key); if (t) openPicker(t); } else openLightbox(card); });
   const si = document.getElementById('search-input'); if (si) si.placeholder = 'search by name or any trait...';
   addHeldSorts();

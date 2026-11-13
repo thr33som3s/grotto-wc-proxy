@@ -4,10 +4,10 @@ import fs from "fs";
 import assert from "assert/strict";
 const html = fs.readFileSync("/home/claude/repo/site/conn3ct_header_v52.html", "utf8");
 const js = html.split("<script>")[1].split("</script>")[0];
-const dom = new JSDOM(`<div class="c-view-bar"><button id="view-all"></button><button id="view-mine"></button></div><div id="wallet-pill"><span id="wallet-addr"></span><button id="disconnect-btn"></button></div><input id="search-input"><div id="c-grid"></div><div id="results-count"></div>`, { runScripts: "outside-only", url: "https://thr33som3s.com/conn3ct" });
+const dom = new JSDOM(`<div class="c-view-bar"><button id="view-all"></button><button id="view-mine"></button></div><div id="wallet-pill"><span id="wallet-addr"></span><button id="disconnect-btn"></button></div><input id="search-input"><div id="c-grid"></div><div id="c-lb"><img id="lb-img"><div id="lb-data"></div></div><div id="results-count"></div>`, { runScripts: "outside-only", url: "https://thr33som3s.com/conn3ct" });
 const w = dom.window, d = w.document; w.HTMLElement.prototype.scrollIntoView = () => {};
 w.ethers = { providers: {}, Contract: function () {} };
-w.eval(js + `;window.__t = { openBuild3r, openEvent, renderCard, getFilteredTokens, openPicker, refreshPlayerUi, addPlayerUi, onSearch,
+w.eval(js + `;window.__t = { openLightbox, closeLightbox, renderGrid, filtersNow: () => filters, openBuild3r, openEvent, renderCard, getFilteredTokens, openPicker, refreshPlayerUi, addPlayerUi, onSearch,
   st: () => ({ pickMode, b3, evPlay }), bk: (k) => byKey.get(k),
   set: (o) => { if ('walletAddr' in o) walletAddr = o.walletAddr; if ('session' in o) session = o.session; if ('api' in o) api = o.api; if ('getJSON' in o) getJSON = o.getJSON; if ('provider' in o) provider = o.provider; if ('catalog' in o) { catalog = o.catalog; byKey = new Map(catalog.map(t => [t.key, t])); catalogLoaded = true; } } };`);
 const T = w.__t;
@@ -50,6 +50,27 @@ T.openPicker(T.bk('univ3rs3:4010')); T.openPicker(T.bk('univ3rs3:4010'));   // a
 assert.equal(T.st().b3.tokens.length, 15);
 assert.match(T.renderCard(T.bk('univ3rs3:93009')), /added ✓/);
 assert.match(T.renderCard(T.bk('univ3rs3:4018')), /click to add/);
+// details while building: open the expansion from the card's details button, add from inside it, close, nothing lost
+T.set({ getJSON: async () => ({}) });
+const grid = d.getElementById('c-grid');
+grid.innerHTML = T.renderCard(T.bk('univ3rs3:4018'));
+const detBtn = grid.querySelector('[data-details]');
+assert.ok(detBtn, 'details button on cards while building');
+T.openLightbox(grid.querySelector('[data-clickable]'));
+assert.ok(d.getElementById('c-lb').classList.contains('open'));
+let lb = d.getElementById('lb-data').innerHTML;
+assert.match(lb, /Pretty Interesting Boyfriend/); assert.match(lb, /not in this 3v3nt/); assert.match(lb, /Stanford, CA/);
+// a trait click inside the expansion doesn't navigate away while building
+d.querySelector('#lb-data [data-trait-key]').dispatchEvent(new w.Event('click', { bubbles: true }));
+assert.equal(Object.keys(T.filtersNow()).length, 0); assert.equal(d.getElementById('search-input').value, 'stan');
+d.querySelector('[data-lbadd]').dispatchEvent(new w.Event('click', { bubbles: true }));
+assert.equal(T.st().b3.tokens.length, 16); assert.match(d.getElementById('lb-data').innerHTML, /in this 3v3nt/);
+d.querySelector('[data-lbadd]').dispatchEvent(new w.Event('click', { bubbles: true }));   // and out again
+assert.equal(T.st().b3.tokens.length, 15); assert.match(d.getElementById('lb-data').innerHTML, /not in this 3v3nt/);
+T.closeLightbox();
+assert.equal(d.getElementById('c-lb').classList.contains('open'), false);
+assert.equal(T.st().pickMode, 'build'); assert.equal(d.getElementById('search-input').value, 'stan'); assert.equal(T.getFilteredTokens().length, 22);
+assert.match(T.renderCard(T.bk('univ3rs3:93009')), /added ✓/);
 d.getElementById('search-input').value = 'shayna'; T.onSearch();
 assert.equal(T.getFilteredTokens().length, 17);
 const SHAYNA = ['univ3rs3:70069','univ3rs3:317004','univ3rs3:317006','univ3rs3:317010','univ3rs3:317011','bulk:9','bulk:319030'];
