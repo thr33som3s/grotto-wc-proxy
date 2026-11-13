@@ -22,3 +22,17 @@ test("derive: balances, burns excluded from holdings, supply counts", () => {
   assert.deepEqual(holdings, [["univ3rs3", "314001", A, "5"], ["univ3rs3", "314001", Bw, "3"]]);
   assert.deepEqual(supply, [["univ3rs3", "314001", "10", "2", "8", 2], ["bulk", "2024001", "1", "1", "0", 0]]);
 });
+import { holdingsAt, dueSnapshots } from "./core.mjs";
+test("holdingsAt: only transfers at or before the moment count", () => {
+  const r = (to, amt, time, from = ZERO) => ["ethereum", "univ3rs3", U, "93009", from, to, String(amt), from === ZERO ? "mint" : "transfer", 1, time, "0x", "e"];
+  const rows = [r(A, 3, "2026-11-13T16:00:00Z"), r(Bw, 1, "2026-11-13T16:30:23Z", A), r(Bw, 1, "2026-11-13T16:30:22Z", A)];
+  assert.deepEqual(holdingsAt(rows, "2026-11-13T16:30:22Z"), [["univ3rs3", "93009", A, "2"], ["univ3rs3", "93009", Bw, "1"]]);
+  assert.deepEqual(holdingsAt(rows, "2026-11-13T15:00:00Z"), []);
+});
+test("dueSnapshots: time passed plus settle, chains indexed past it, valid tab, not yet taken", () => {
+  const now = Date.parse("2026-11-13T17:00:00Z"), chains = { ethereum: "2026-11-13T16:59:00Z", base: "2026-11-13T16:59:30Z" };
+  const reqs = [{ tab: "snapshot-a", at: "2026-11-13T16:30:00Z" }, { tab: "snapshot-b", at: "2026-11-13T16:55:00Z" },
+    { tab: "snapshot-c", at: "2026-11-13T16:00:00Z", status: "taken" }, { tab: "holdings", at: "2026-11-13T16:00:00Z" }];
+  assert.deepEqual(dueSnapshots(reqs, now, chains).map((r) => r.tab), ["snapshot-a"]);
+  assert.deepEqual(dueSnapshots(reqs, now, { ethereum: "2026-11-13T16:20:00Z" }).map((r) => r.tab), []);
+});

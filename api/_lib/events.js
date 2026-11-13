@@ -34,7 +34,8 @@ export function cleanEvent(c) {
   out.intro = (Array.isArray(c?.intro) ? c.intro : String(c?.intro || "").split(/\n\s*\n/)).map((p) => String(p).trim()).filter(Boolean).slice(0, 30);
   out.status = c?.status === "published" ? "published" : "draft";
   out.window = { opens: String(c?.window?.opens || ""), closes: String(c?.window?.closes || "") };
-  out.snapshot = { tab: String(c?.snapshot?.tab || ""), at: String(c?.snapshot?.at || "") };
+  // The snapshot's tab is always "snapshot-<id>" in the ledger sheet; the ledger job takes it, exact to the second.
+  out.snapshot = { tab: `snapshot-${id}`, at: Date.parse(c?.snapshot?.at) ? new Date(c.snapshot.at).toISOString() : "" };
   const seen = new Set();
   for (const t of Array.isArray(c?.tokens) ? c.tokens : []) {
     const key = String(t?.key || "");
@@ -52,7 +53,7 @@ export function cleanEvent(c) {
     if (!out.name) problems.push("give the 3v3nt a name before publishing");
     if (!(Date.parse(out.window.opens) < Date.parse(out.window.closes))) problems.push("set when the 3v3nt opens and closes");
     if (!out.tokens.some((t) => t.role)) problems.push("assign at least one token to a role");
-    if (out.tokens.some((t) => t.role === "hold") && out.roles.hold.count === "snapshot" && !out.snapshot.tab) problems.push("the holder role counts a snapshot: name its tab");
+    if (out.tokens.some((t) => t.role === "hold") && out.roles.hold.count === "snapshot" && !out.snapshot.at) problems.push("the holder role counts a snapshot: set when it's taken");
   }
   return { config: out, problems };
 }
@@ -60,6 +61,7 @@ export function cleanEvent(c) {
 export const roleKeys = (cfg, role) => cfg.tokens.filter((t) => t.role === role).map((t) => t.key);
 export const eventCollections = (cfg) => [...new Set(cfg.tokens.map((t) => t.key.split(":")[0]))];
 
+export const usesSnapshot = (cfg) => roleKeys(cfg, "hold").length > 0 && cfg.roles.hold.count === "snapshot";
 export function eventWindow(cfg, now = Date.now(), testMode = false) {
   const o = Date.parse(cfg.window.opens), c = Date.parse(cfg.window.closes);
   const open = testMode || (cfg.status === "published" && now >= o && now <= c);

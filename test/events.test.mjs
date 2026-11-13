@@ -7,7 +7,8 @@ const ARTIST = "0xfe917312344b4ed3283c5e142868cd3eaa782933";
 const W = ethers.Wallet.createRandom(); const ADDR = W.address.toLowerCase();
 const BURN = "0x3d373231a0a60bb6203fd1a91e3f058100c2244d", VAULT = "0xe5a97ce51460114e13b632df211896c663cbae76";
 const sheets = {
-  "snapshot-f13": [["c","i","w","b"], ["univ3rs3","93009",ADDR,"3"], ["gen2","1019",ADDR,"1"], ["univ3rs3","1010",ADDR,"1"]],
+  snapshots: [["tab","at","status","taken_at","rows"], ["snapshot-friday-13-x3","2026-11-13T16:30:22.000Z","pending","",""]],
+  "snapshot-friday-13-x3": [["c","i","w","b"], ["univ3rs3","93009",ADDR,"3"], ["gen2","1019",ADDR,"1"], ["univ3rs3","1010",ADDR,"1"]],
   holdings: [["c","i","w","b"], ["univ3rs3","70069",ADDR,"5"], ["bulk","9",ADDR,"2"], ["univ3rs3","34235",ADDR,"1"]],
   transfers: [["chain","coll","x","id","from","to","amount","type","block","time","tx"]],
 };
@@ -41,7 +42,7 @@ const call = (method, q, b, wallet) => new Promise((res) => handler({ method, qu
 const f13cfg = {
   id: "friday-13-x3", name: "Friday the 13th x3", intro: "para one\n\npara two", status: "published",
   window: { opens: "2026-11-13T16:00:00Z", closes: "2099-11-14T07:59:59Z" },
-  snapshot: { tab: "snapshot-f13", at: "2026-11-13T16:30:22Z" },
+  snapshot: { tab: "anything-typed-is-ignored", at: "2026-11-13T16:30:22Z" },
   tokens: [...F.F13_HOLD.map((key) => ({ key, role: "hold" })), ...F.F13_BURN.map((key) => ({ key, role: "burn" })), { key: "univ3rs3:1010", role: null }],
   roles: { hold: { count: "snapshot", claims: 1 }, burn: { claims: 1 } },
 };
@@ -52,11 +53,12 @@ test("clean: f13 rebuilt in build3r matches the hand-coded lists exactly", () =>
   assert.deepEqual(E.roleKeys(config, "hold"), F.F13_HOLD);
   assert.deepEqual(E.roleKeys(config, "burn"), F.F13_BURN);
   assert.deepEqual(config.intro, ["para one", "para two"]);
+  assert.deepEqual(config.snapshot, { tab: "snapshot-friday-13-x3", at: "2026-11-13T16:30:22.000Z" });
   assert.equal(config.tokens.find((t) => t.key === "univ3rs3:1010").role, null);   // added, unassigned
 });
 test("clean: publishing needs a name, times, a role, and a snapshot tab for snapshot holders", () => {
   const p = E.cleanEvent({ id: "x1", status: "published", tokens: [{ key: "univ3rs3:1", role: "hold" }] }).problems.join(" | ");
-  assert.match(p, /name/); assert.match(p, /opens and closes/); assert.match(p, /snapshot/);
+  assert.match(p, /name/); assert.match(p, /opens and closes/); assert.match(p, /set when it's taken/);
   assert.match(E.cleanEvent({ id: "Bad Id" }).problems[0], /id/);
   assert.deepEqual(E.cleanEvent({ id: "draft-ok" }).problems, []);   // drafts can be incomplete
 });
@@ -92,6 +94,16 @@ test("handler: only thr33s can save; drafts stay hidden; published shows up", as
   assert.equal((await call("POST", {}, { phase: "build3r", config: f13cfg }, ARTIST)).code, 200);
   const pub = (await call("GET", { phase: "events" }, null)).j.events;
   assert.equal(pub.length, 1); assert.equal(pub[0].name, "Friday the 13th x3"); assert.equal(pub[0].window.open, true);
+});
+test("handler: until the ledger job takes the snapshot, nobody claims by holding", async () => {
+  const g = await call("GET", { phase: "event", id: "friday-13-x3" }, null, ADDR);
+  assert.equal(g.j.window.snapshotReady, false); assert.deepEqual(g.j.held, []);
+  const r = await call("POST", {}, { phase: "event", id: "friday-13-x3", hold: ["univ3rs3:93009"] }, ADDR);
+  assert.equal(r.code, 409); assert.match(r.j.error, /snapshot hasn't been taken/);
+  const art = await call("GET", { phase: "events", all: "1" }, null, ARTIST);
+  assert.equal(art.j.events[0].snapshotStatus.status, "pending");
+  sheets.snapshots[1][2] = "taken";
+  (await import("../api/_lib/ledger.js")).resetLedgerMemo();
 });
 test("handler: the f13 game end to end through the generic runtime", async () => {
   const g = await call("GET", { phase: "event", id: "friday-13-x3" }, null, ADDR);

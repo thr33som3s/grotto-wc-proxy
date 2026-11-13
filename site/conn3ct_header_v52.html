@@ -1782,7 +1782,9 @@ function evHub() {
   let html = head;
   if (info.tokens.hold.length) {
     const held = info.held || [];
-    html += held.length
+    html += info.window.snapshotReady === false
+      ? `<p class="c3-note">holder claims open once the snapshot is in. it's taken as of ${esc(evWhen(info.window.snapshotAt))}; come back shortly after.</p>`
+      : held.length
       ? `<p class="c3-h4">${info.window.holdCount === 'snapshot' ? 'qualifying pieces you held at the snapshot' : 'qualifying pieces you hold'}: ${evPlay.hold.size} of ${held.length} claimed (${info.roles.hold.claims} claim${info.roles.hold.claims !== 1 ? 's' : ''} each)</p>
         <div class="c3-actions"><button class="c3-btn${evPlay.hold.size ? '' : ' c3-primary'}" id="c3-evhold">${evPlay.hold.size ? 'change' : 'click to claim your pieces'}</button></div>`
       : `<p class="c3-note">your wallet ${info.window.holdCount === 'snapshot' ? 'held none of the qualifying pieces at the snapshot' : 'holds none of the qualifying pieces'}.</p>`;
@@ -1890,7 +1892,7 @@ async function openBuild3r() {
     const id = idEl.value.trim();
     if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(id)) { modalMsg('the id must be 2–41 lowercase letters, numbers or hyphens.'); return; }
     if (list.some(c => c.id === id)) { modalMsg('a 3v3nt with that id already exists. open it instead.'); return; }
-    b3 = { id, name: nameEl.value.trim(), intro: [], status: 'draft', window: { opens: '', closes: '' }, snapshot: { tab: '', at: '' }, tokens: [],
+    b3 = { id, name: nameEl.value.trim(), intro: [], status: 'draft', window: { opens: '', closes: '' }, snapshot: { tab: 'snapshot-' + id, at: '' }, tokens: [],
       roles: { hold: { count: 'snapshot', claims: 1, max: null }, burn: { claims: 1, max: null }, vault: { claims: 1, max: null }, cite: { claims: 1, max: null } } };
     b3Stash(); b3Window();
   };
@@ -1903,7 +1905,7 @@ function b3ReadWindow() {
   b3.name = v('c3-b3n').trim();
   b3.intro = v('c3-b3intro').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
   b3.window = { opens: fromLocalInput(v('c3-b3open')), closes: fromLocalInput(v('c3-b3close')) };
-  b3.snapshot = { tab: v('c3-b3snaptab').trim(), at: fromLocalInput(v('c3-b3snapat')) };
+  b3.snapshot = { ...b3.snapshot, at: fromLocalInput(v('c3-b3snapat')) };
   b3Stash();
 }
 function b3Window(note) {
@@ -1913,8 +1915,8 @@ function b3Window(note) {
     <label class="c3-field">intro <span class="c3-note">a blank line between paragraphs</span><textarea id="c3-b3intro" rows="6">${esc((b3.intro || []).join('\n\n'))}</textarea></label>
     <div class="c3-b3row"><label class="c3-field">opens<input type="datetime-local" id="c3-b3open" value="${toLocalInput(b3.window.opens)}"></label>
       <label class="c3-field">closes<input type="datetime-local" id="c3-b3close" value="${toLocalInput(b3.window.closes)}"></label></div>
-    <div class="c3-b3row"><label class="c3-field">snapshot tab <span class="c3-note">in the ledger sheet</span><input id="c3-b3snaptab" value="${esc(b3.snapshot.tab)}" placeholder="snapshot-${esc(b3.id)}"></label>
-      <label class="c3-field">snapshot taken<input type="datetime-local" id="c3-b3snapat" value="${toLocalInput(b3.snapshot.at)}"></label></div>
+    <div class="c3-b3row"><label class="c3-field">snapshot <span class="c3-note">when holder roles count holdings at a snapshot</span><input type="datetime-local" id="c3-b3snapat" value="${toLocalInput(b3.snapshot.at)}"></label>
+      <div class="c3-field"><span>snapshot status</span><span class="c3-note">${esc(b3SnapText())}</span></div></div>
     <p class="c3-h4">tokens in this 3v3nt: ${b3.tokens.length}</p>
     <div class="c3-b3tiles">${tile('unassigned', 'unassigned')}${tile('hold', 'holder')}${tile('burn', 'burn')}${tile('vault', 'vault')}${tile('cite', 'cite')}</div>
     <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-b3add">add tokens from the grid</button></div>
@@ -1926,11 +1928,22 @@ function b3Window(note) {
   document.getElementById('c3-b3pub').onclick = () => { b3ReadWindow(); return b3Save(b3.status === 'published' ? 'draft' : 'published'); };
   document.getElementById('c3-b3list').onclick = () => { b3ReadWindow(); openBuild3r(); };
 }
+// The ledger job takes the snapshot (tab "snapshot-<id>" in the ledger sheet) about 10 minutes after its time,
+// holdings exact to that second. Status comes from the ledger's "snapshots" tab.
+function b3SnapText() {
+  const st = b3.snapshotStatus;
+  if (!b3.snapshot.at) return 'no snapshot time set';
+  if (!st) return `not requested yet: saving files the request for ${whenText(b3.snapshot.at)}`;
+  if (st.status === 'taken') return `taken: holdings as of ${whenText(st.at)}, ${st.rows} rows (tab ${b3.snapshot.tab || 'snapshot-' + b3.id})`;
+  if (st.status === 'exists') return `a tab named ${b3.snapshot.tab} already existed, so it was left as it is`;
+  return `requested for ${whenText(st.at)}; the ledger job takes it about 10 minutes after that`;
+}
 async function b3Save(status) {
   modalMsg('saving...');
   try {
     const r = await api('/commit', { method: 'POST', auth: true, body: { phase: 'build3r', config: { ...b3, status } } });
-    b3 = r.config; b3Stash();
+    const prevSnap = b3.snapshotStatus;
+    b3 = r.config; b3.snapshotStatus = prevSnap && prevSnap.status === 'taken' ? prevSnap : (b3.snapshot.at ? { status: 'pending', at: b3.snapshot.at } : null); b3Stash();
     b3Window(status === 'published' ? 'published. its button appears on conn3ct.' : 'saved.');
     if (status === 'published') loadEventButtons();
   } catch (e) { modalMsg(e.message); }

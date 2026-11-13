@@ -3,7 +3,7 @@
 // Later runs: check both chains for events since the last processed block. Nothing new -> exit.
 // Something new -> write it, rebuild holdings and supply, then keep checking every minute
 // until 15 minutes pass with no further changes.
-import { CONTRACTS, CHAINS, TRANSFER_HEADER, HOLDINGS_HEADER, SUPPLY_HEADER, rowsFromTransfer, derive } from "./core.mjs";
+import { CONTRACTS, CHAINS, TRANSFER_HEADER, HOLDINGS_HEADER, SUPPLY_HEADER, rowsFromTransfer, derive, holdingsAt, dueSnapshots, SNAPSHOT_HEADER } from "./core.mjs";
 
 const SHEET = process.env.LEDGER_SHEET_ID;
 const ALCHEMY = process.env.ALCHEMY_API_KEY;
@@ -130,6 +130,33 @@ async function repairPastState(state) {
   await rebuildDerived();
 }
 
+// 3v3nt snapshots. Requests sit in the "snapshots" tab (written when thr33s saves a 3v3nt in build3r).
+// A due request gets its own tab: holdings rebuilt from the transfers as of its exact time. Taken once.
+async function takeSnapshots(state) {
+  let tabs;
+  try { tabs = (await sheets(`?fields=sheets.properties.title`)).sheets.map((x) => x.properties.title); } catch (e) { log(`snapshots: ${e.message}`); return; }
+  if (!tabs.includes("snapshots")) return;
+  const rows = (await readTab("snapshots", "E")).slice(1);
+  const requests = rows.map((r, i) => ({ row: i + 2, tab: r[0], at: r[1], status: r[2] }));
+  const through = {};
+  for (const chain of Object.keys(CHAINS)) {
+    if (!state[chain]) return;
+    const b = await alchemy(chain, "eth_getBlockByNumber", ["0x" + state[chain].lastBlock.toString(16), false]);
+    through[chain] = new Date(Number(BigInt(b.timestamp)) * 1000).toISOString();
+  }
+  const due = dueSnapshots(requests, Date.now(), through);
+  if (!due.length) return;
+  const all = (await readTab("transfers", "L")).slice(1);
+  for (const r of due) {
+    if (tabs.includes(r.tab)) { log(`snapshot ${r.tab}: tab already exists, not overwritten`); await sheets(`/values/${rng(`snapshots!C${r.row}:E${r.row}`)}?valueInputOption=RAW`, { method: "PUT", body: JSON.stringify({ values: [["exists", new Date().toISOString(), ""]] }) }); continue; }
+    const held = holdingsAt(all, r.at);
+    await sheets(`:batchUpdate`, { method: "POST", body: JSON.stringify({ requests: [{ addSheet: { properties: { title: r.tab } } }] }) });
+    await writeTab(r.tab, [HOLDINGS_HEADER, ...held]);
+    await sheets(`/values/${rng(`snapshots!C${r.row}:E${r.row}`)}?valueInputOption=RAW`, { method: "PUT", body: JSON.stringify({ values: [["taken", new Date().toISOString(), held.length]] }) });
+    log(`snapshot ${r.tab}: holdings as of ${r.at}, ${held.length} rows`);
+  }
+}
+
 async function main() {
   const missing = [!SHEET && "LEDGER_SHEET_ID", !ALCHEMY && "ALCHEMY_API_KEY (repository secret)", !ACCESS_TOKEN && "Google access token (from the sign-in step)"].filter(Boolean);
   if (missing.length) throw new Error(`Missing: ${missing.join(", ")}`);
@@ -141,6 +168,7 @@ async function main() {
   }
   if (Object.keys(state).length) await repairPastState(state);
   let added = await check(state);
+  await takeSnapshots(state).catch((e) => log(`snapshots failed: ${e.message}`));   // never fails the ledger
   if (!added) { log("no new events"); return; }
   // Burst: keep checking every minute until 15 quiet minutes.
   let lastChange = Date.now();

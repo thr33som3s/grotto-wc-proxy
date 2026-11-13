@@ -72,3 +72,10 @@ export async function readUsResults(key) {
 export async function readSnapshot(name, key) {
   return (await tab(name, "D", key)).map(([coll, id, wallet, balance]) => ({ key: tokenKey(coll, id), coll, id, wallet: String(wallet).toLowerCase(), balance: +balance }));
 }
+
+// Snapshot requests and their status (tab "snapshots": tab, at, status, taken_at, rows), written by the store
+// when thr33s saves a 3v3nt and completed by the ledger job. Missing tab -> no requests yet.
+export async function readSnapshotRequests(key) {
+  try { return new Map((await tab("snapshots", "E", key)).map(([t, at, status, takenAt, rows]) => [t, { at, status: status || "pending", takenAt: takenAt || "", rows: +rows || 0 }])); }
+  catch { return new Map(); }
+}

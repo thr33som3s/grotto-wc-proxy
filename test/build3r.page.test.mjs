@@ -105,11 +105,13 @@ d.getElementById('c3-b3back').onclick();
 d.querySelector('[data-b3role="cite"]').onclick(); d.getElementById('c3-b3claims').value = '0'; d.getElementById('c3-b3max').value = '1'; d.getElementById('c3-b3back').onclick();
 d.getElementById('c3-b3intro').value = 'para one\n\npara two';
 d.getElementById('c3-b3open').value = '2026-11-13T11:00'; d.getElementById('c3-b3close').value = '2026-11-14T02:59';
-d.getElementById('c3-b3snaptab').value = 'snapshot-f13';
+d.getElementById('c3-b3snapat').value = '2026-11-13T11:30';
+assert.match(d.getElementById('c3-modal-body').innerHTML, /no snapshot time set/);
 await d.getElementById('c3-b3pub').onclick();
 const cfg = saved.at(-1).config;
 assert.equal(saved.at(-1).phase, 'build3r'); assert.equal(cfg.status, 'published'); assert.equal(JSON.stringify(cfg.intro), '["para one","para two"]');
-assert.equal(cfg.roles.cite.claims, 0); assert.equal(cfg.roles.cite.max, 1); assert.equal(cfg.roles.hold.count, 'snapshot'); assert.equal(cfg.snapshot.tab, 'snapshot-f13');
+assert.equal(cfg.roles.cite.claims, 0); assert.equal(cfg.roles.cite.max, 1); assert.equal(cfg.roles.hold.count, 'snapshot'); assert.equal(cfg.snapshot.tab, 'snapshot-friday-the-13th-x3'); assert.ok(cfg.snapshot.at.endsWith('Z'));
+assert.match(d.getElementById('c3-modal-body').innerHTML, /requested for .*the ledger job takes it about 10 minutes after that/);
 assert.ok(cfg.window.opens.endsWith('Z') && Date.parse(cfg.window.closes) > Date.parse(cfg.window.opens));
 assert.match(d.getElementById('c3-modal-body').innerHTML, /published/);
 
@@ -122,6 +124,10 @@ const posts = [];
 T.set({ walletAddr: '0xabc', session: { wallet: '0xabc', profile: { username: 'p' } }, provider: { getSigner: () => ({ signMessage: async () => '0xsig' }) },
   api: async (path, o) => { if (path.startsWith('/commit?phase=event&')) return info; posts.push(o.body); return { issuedAt: 'x', message: 'm', claims: 3 }; } });
 T.refreshPlayerUi(); assert.equal(d.getElementById('view-build3r'), null);
+info.window.snapshotReady = false;
+await T.openEvent(cfg.id);
+assert.match(d.getElementById('c3-modal-body').innerHTML, /holder claims open once the snapshot is in/);
+info.window.snapshotReady = true;
 await T.openEvent(cfg.id);
 let h = d.getElementById('c3-modal-body').innerHTML;
 assert.match(h, /para one/); assert.match(h, /0 of 1 claimed/); assert.match(h, /choose cards to cite/); assert.match(h, /1 claim per edition burned/); assert.match(h, /you hold 4/);

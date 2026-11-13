@@ -75,3 +75,19 @@ export function derive(rows) {
   supply.sort(cmpToken);
   return { holdings, supply };
 }
+
+// Holdings as of a moment: only transfers whose block time is at or before `atIso` count.
+// Used for 3v3nt snapshots, so a snapshot is exact to the second whenever the job gets to it.
+export function holdingsAt(rows, atIso) {
+  const at = Date.parse(atIso);
+  return derive(rows.filter((r) => r[9] && Date.parse(r[9]) <= at)).holdings;
+}
+// Snapshot requests (ledger tab "snapshots": tab, at, status, taken_at, rows). One is due once its time has
+// passed by SNAPSHOT_SETTLE_MS, so both chains' confirmation lag has certainly been indexed.
+export const SNAPSHOT_HEADER = ["tab", "at", "status", "taken_at", "rows"];
+export const SNAPSHOT_SETTLE_MS = 10 * 60 * 1000;
+export const SNAPSHOT_TAB_RE = /^snapshot-[a-z0-9-]{1,60}$/;
+export function dueSnapshots(requests, now, chainsDoneThrough) {
+  return requests.filter((r) => r.tab && SNAPSHOT_TAB_RE.test(r.tab) && r.status !== "taken" && Date.parse(r.at) + SNAPSHOT_SETTLE_MS <= now
+    && Object.values(chainsDoneThrough).every((t) => Date.parse(t) >= Date.parse(r.at)));
+}

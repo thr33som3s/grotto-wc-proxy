@@ -5,10 +5,10 @@
 // Entries for candidacy: [{ race: "KY", candidate: "univ3rs3:10001" }, ...]
 // Demographics: { demographics: [{ kind: free|added|straddle, card?, team?, color, tiers, races }], inserts: [{ key, qty }] }
 import { store } from "./_lib/store.js";
-import { readHoldings, readTransfers, readUsResults, readSnapshot } from "./_lib/ledger.js";
+import { readHoldings, readTransfers, readUsResults, readSnapshot, readSnapshotRequests } from "./_lib/ledger.js";
 import { F13, F13_HOLD, F13_BURN, f13Collections, f13Window, snapshotHolds, checkF13, f13Claims, f13Confirmed, f13Message } from "./_lib/f13.js";
 import { tally } from "./_lib/tally.js";
-import { cleanEvent, roleKeys, eventCollections, eventWindow, heldIn, cleanPayload, checkEntry, entryClaims, moves, confirmedClaims, entryMessage } from "./_lib/events.js";
+import { cleanEvent, usesSnapshot, roleKeys, eventCollections, eventWindow, heldIn, cleanPayload, checkEntry, entryClaims, moves, confirmedClaims, entryMessage } from "./_lib/events.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
   univ3rs3Tokens, collectionTokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, candidateRaces, shortName,
@@ -294,12 +294,12 @@ async function events(req, res, phase, wallet, KEY) {
   if (phase === "events") {
     const { events: rows = [] } = await store("list_events", {});
     const list = rows.map(parseEvent).filter(Boolean);
-    if (isArtist && req.query.all) return res.status(200).json({ events: list });
+    if (isArtist && req.query.all) { const snaps = await readSnapshotRequests(KEY); return res.status(200).json({ events: list.map((c) => ({ ...c, snapshotStatus: snaps.get(c.snapshot?.tab) || null })) }); }
     return res.status(200).json({ events: list.filter((c) => c.status === "published").map((c) => ({ id: c.id, name: c.name, window: eventWindow(c, Date.now(), TEST_MODE) })) });
   }
   if (phase === "build3r") {
     if (!isArtist) return res.status(403).json({ error: "build3r is for thr33s" });
-    if (req.method === "GET") { const c = await loadEvent(String(req.query.id || "")); return c ? res.status(200).json({ config: c }) : res.status(404).json({ error: "no such 3v3nt" }); }
+    if (req.method === "GET") { const c = await loadEvent(String(req.query.id || "")); return c ? res.status(200).json({ config: c, snapshot: (await readSnapshotRequests(KEY)).get(c.snapshot.tab) || null }) : res.status(404).json({ error: "no such 3v3nt" }); }
     if (req.method !== "POST") return res.status(405).json({ error: "GET or POST" });
     const { config, problems } = cleanEvent(body(req).config);
     if (problems.length) return res.status(422).json({ error: problems[0], problems, config });
@@ -316,7 +316,10 @@ async function events(req, res, phase, wallet, KEY) {
   const lists = await Promise.all(eventCollections(cfg).map((c) => collectionTokens(KEY, c).catch(() => [])));
   const all = new Map(lists.flat().map((t) => [t.key, t]));
   const card = (k) => { const t = all.get(k); return { key: k, name: t ? t.name : k, image: t ? t.image || "" : "" }; };
-  const holdRows = async () => cfg.roles.hold.count === "snapshot" ? readSnapshot(cfg.snapshot.tab, KEY) : readHoldings(KEY);
+  // Snapshot holders: until the ledger job has taken the snapshot, nobody can claim by holding.
+  const snapReady = !usesSnapshot(cfg) || TEST_MODE || ((await readSnapshotRequests(KEY)).get(cfg.snapshot.tab) || {}).status === "taken";
+  win.snapshotReady = snapReady;
+  const holdRows = async () => !snapReady ? [] : cfg.roles.hold.count === "snapshot" ? readSnapshot(cfg.snapshot.tab, KEY) : readHoldings(KEY);
   if (req.method === "GET") {
     const out = { id: cfg.id, name: cfg.name, intro: cfg.intro, window: win, roles: cfg.roles,
       tokens: Object.fromEntries(["hold", "burn", "vault", "cite"].map((r) => [r, roleKeys(cfg, r).map(card)])) };
@@ -345,6 +348,7 @@ async function events(req, res, phase, wallet, KEY) {
   if (existing) return res.status(409).json({ error: "you already submitted your entry; it is final", entry: existing });
   const b = body(req);
   const payload = cleanPayload(b);
+  if (payload.hold.length && !snapReady) return res.status(409).json({ error: "the snapshot hasn't been taken yet; holder claims open once it is" });
   const [hrows, holdings] = await Promise.all([payload.hold.length ? holdRows() : [], readHoldings(KEY)]);
   const held = TEST_MODE ? new Set(roleKeys(cfg, "hold")) : new Set(heldIn(cfg, hrows, wallet));
   const live = TEST_MODE ? { get: () => 999 } : new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
