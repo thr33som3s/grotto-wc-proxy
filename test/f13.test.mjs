@@ -63,7 +63,10 @@ test("window: open 11:00am EST Fri through 11:59:59pm PST", () => {
 });
 
 // Handler end to end, with the clock inside the window.
-const realNow = Date.now;   // handler tests run on the real clock (inside the window today); signing uses new Date()
+const realNow = Date.now;
+// Handler tests run at a fixed moment inside the window (Fri Nov 13, 1pm EST), Date and new Date() alike.
+import { mock } from "node:test";
+mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-13T18:00:00Z") });
 const handler = (await import("../api/commit.js")).default;
 const tok = sess.issueToken(ADDR);
 function call(method, q, b, auth = true) {
@@ -105,10 +108,10 @@ test("handler: prepare, sign, store; second entry refused; burns confirm from th
   assert.deepEqual(g.j.confirmed, { holdClaims: 2, burnClaims: 4, burned: { "univ3rs3:70069": 3, "bulk:9": 1 }, claims: 6 });
 });
 test("handler: closed after 11:59:59pm PST", async () => {
-  Date.now = () => Date.parse("2026-11-14T08:00:01Z");
+  mock.timers.setTime(Date.parse("2026-11-14T08:00:01Z"));
   const late = sess.issueToken(ADDR);
   const r = await new Promise((res) => handler({ method: "POST", query: {}, body: { phase: "f13", holds: ["univ3rs3:93009"], burns: [] }, headers: { authorization: "Bearer " + late } },
     { setHeader() {}, status(c) { this.c = c; return this; }, json(j) { res({ code: this.c, j }); } }));
-  Date.now = realNow;
+  mock.timers.setTime(Date.parse("2026-11-13T18:00:00Z"));
   assert.equal(r.code, 403);
 });

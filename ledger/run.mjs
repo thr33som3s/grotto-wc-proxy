@@ -3,7 +3,7 @@
 // Later runs: check both chains for events since the last processed block. Nothing new -> exit.
 // Something new -> write it, rebuild holdings and supply, then keep checking every minute
 // until 15 minutes pass with no further changes.
-import { CONTRACTS, CHAINS, TRANSFER_HEADER, HOLDINGS_HEADER, SUPPLY_HEADER, rowsFromTransfer, derive } from "./core.mjs";
+import { CONTRACTS, CHAINS, TRANSFER_HEADER, HOLDINGS_HEADER, SUPPLY_HEADER, rowsFromTransfer, derive, pendingProgress, PENDING_HEADER } from "./core.mjs";
 
 const SHEET = process.env.LEDGER_SHEET_ID;
 const ALCHEMY = process.env.ALCHEMY_API_KEY;
@@ -130,6 +130,23 @@ async function repairPastState(state) {
   await rebuildDerived();
 }
 
+// Pending mints: the "pending" tab (filled by thr33s or Claude) counts down as the ledger records mints of each
+// token straight to each recipient. Only the minted and remaining columns are rewritten, and only when they change.
+async function updatePending() {
+  let tabs;
+  try { tabs = (await sheets(`?fields=sheets.properties.title`)).sheets.map((x) => x.properties.title); } catch (e) { log(`pending: ${e.message}`); return; }
+  if (!tabs.includes("pending")) return;
+  const rows = (await readTab("pending", "H")).slice(1);   // row positions kept: blank rows pass through untouched
+  if (!rows.some((r) => r[0] && r[1] && r[2])) return;
+  const filled = pendingProgress(rows.filter((r) => r[0] && r[1] && r[2]), (await readTab("transfers", "L")).slice(1));
+  let j = 0;
+  const next = rows.map((r) => (r[0] && r[1] && r[2] ? filled[j++] : [, , , , r[4] ?? "", r[5] ?? ""]));
+  const changed = next.some((r, i) => String(r[4]) !== String(rows[i][4] ?? "") || String(r[5]) !== String(rows[i][5] ?? ""));
+  if (!changed) return;
+  await sheets(`/values/${rng(`pending!E2:F${next.length + 1}`)}?valueInputOption=RAW`, { method: "PUT", body: JSON.stringify({ values: next.map((r) => [r[4], r[5]]) }) });
+  log(`pending: ${filled.reduce((a, r) => a + r[5], 0)} editions still pending across ${filled.filter((r) => r[5] > 0).length} rows`);
+}
+
 async function main() {
   const missing = [!SHEET && "LEDGER_SHEET_ID", !ALCHEMY && "ALCHEMY_API_KEY (repository secret)", !ACCESS_TOKEN && "Google access token (from the sign-in step)"].filter(Boolean);
   if (missing.length) throw new Error(`Missing: ${missing.join(", ")}`);
@@ -141,6 +158,7 @@ async function main() {
   }
   if (Object.keys(state).length) await repairPastState(state);
   let added = await check(state);
+  await updatePending().catch((e) => log(`pending failed: ${e.message}`));   // never fails the ledger
   if (!added) { log("no new events"); return; }
   // Burst: keep checking every minute until 15 quiet minutes.
   let lastChange = Date.now();

@@ -72,3 +72,20 @@ export async function readUsResults(key) {
 export async function readSnapshot(name, key) {
   return (await tab(name, "D", key)).map(([coll, id, wallet, balance]) => ({ key: tokenKey(coll, id), coll, id, wallet: String(wallet).toLowerCase(), balance: +balance }));
 }
+
+// Pending mints (tab "pending": collection, token_id, wallet, owed, minted, remaining, source, since): editions owed
+// that haven't been minted to the wallet yet. The ledger job counts "remaining" down as mints arrive. [] if no tab.
+export async function readPending(key) {
+  try {
+    return (await tab("pending", "H", key)).filter((r) => r[0] && r[1] && r[2]).map(([coll, id, wallet, owed, minted, remaining, source]) => {
+      const o = +owed || 0, rem = remaining === undefined || remaining === "" ? o : +remaining;
+      return { key: tokenKey(coll, id), coll, id: String(id), wallet: String(wallet).toLowerCase(), owed: o, remaining: Math.max(0, rem || 0), source: source || "" };
+    });
+  } catch { return []; }
+}
+// key -> { pending, collectors }, counting only what's still pending.
+export function pendingByToken(rows) {
+  const out = new Map();
+  for (const r of rows) { if (r.remaining <= 0) continue; const e = out.get(r.key) || { pending: 0, collectors: new Set() }; e.pending += r.remaining; e.collectors.add(r.wallet); out.set(r.key, e); }
+  return new Map([...out].map(([k, e]) => [k, { pending: e.pending, collectors: e.collectors.size }]));
+}
