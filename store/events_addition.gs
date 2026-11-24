@@ -1,9 +1,10 @@
 // ── 3v3nts from build3r: saved configs ───────────────────────────
-// Addition to the private store's Apps Script (grotto_private_store.gs). Keeps one row per 3v3nt in a tab
-// named "events": id, status, config (JSON), updated_at, by. Saving the same id replaces its row.
-// In doPost, after the secret has been checked and the body parsed, add:
-//     const ev = handleEvents_(body);
-//     if (ev) return ContentService.createTextOutput(JSON.stringify(ev)).setMimeType(ContentService.MimeType.JSON);
+// A second file in the private store's Apps Script project (next to the main script). Keeps one row per 3v3nt in
+// a tab named "events": id, status, config (JSON), updated_at, by. Saving the same id replaces its row.
+// doPost sends the three event actions here with one line in its switch:
+//     case 'put_event': case 'get_event': case 'list_events': return out(handleEvents_(req));
+// After saving: run authorizeEventsOnce from the editor once (it asks Google for access to the ledger sheet),
+// then Deploy → Manage deployments → edit → New version → Deploy.
 function handleEvents_(body) {
   const a = body.action;
   if (a !== "put_event" && a !== "get_event" && a !== "list_events") return null;
@@ -45,4 +46,11 @@ function requestSnapshot_(configJson) {
   if (i >= 0 && String(rows[i][2]) === "taken") return;
   const row = [c.snapshot.tab, c.snapshot.at, "pending", "", ""];
   if (i >= 0) sh.getRange(i + 2, 1, 1, 5).setValues([row]); else sh.appendRow(row);
+}
+
+// Run once by hand after adding this file: Google asks to allow access to the ledger sheet (for snapshot
+// requests) and the events tab is created. Changes nothing else.
+function authorizeEventsOnce() {
+  SpreadsheetApp.openById(LEDGER_SHEET_ID).getName();
+  handleEvents_({ action: "list_events" });
 }
