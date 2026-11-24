@@ -1,7 +1,7 @@
 // GET /api/holders?token=univ3rs3:317004              -> every wallet holding it, largest balance first
 // GET /api/holders?token=univ3rs3:317004&activity=1   -> also every mint, transfer and burn of it, newest first
-// From the ledger. Burn addresses are excluded from holders.
-import { readHoldings, readSupply, readState, readTransfers } from "./_lib/ledger.js";
+// From the ledger. Burn addresses are excluded from holders. pending: editions owed but not minted yet.
+import { readHoldings, readSupply, readState, readTransfers, readPending } from "./_lib/ledger.js";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -12,7 +12,11 @@ export default async function handler(req, res) {
   if (!/^[a-z0-9]+:\d+$/.test(token)) return res.status(400).json({ error: "token must look like univ3rs3:317004" });
   try {
     const wantActivity = !!req.query.activity;
-    const [all, supply, ledger, transfers] = await Promise.all([readHoldings(KEY), readSupply(KEY), readState(KEY), wantActivity ? readTransfers(KEY) : null]);
+    const [all, supply, ledger, transfers, pend] = await Promise.all([readHoldings(KEY), readSupply(KEY), readState(KEY), wantActivity ? readTransfers(KEY) : null, readPending(KEY)]);
+    // Editions owed but not minted to these wallets yet, largest first.
+    const pmap = new Map();
+    for (const p of pend) if (p.key === token && p.remaining > 0) pmap.set(p.wallet, (pmap.get(p.wallet) || 0) + p.remaining);
+    const pending = [...pmap].map(([wallet, editions]) => ({ wallet, editions })).sort((a, b) => b.editions - a.editions || (a.wallet < b.wallet ? -1 : 1));
     const holders = all.filter((h) => h.key === token).map(({ wallet, balance }) => ({ wallet, balance }))
       .sort((a, b) => b.balance - a.balance || (a.wallet < b.wallet ? -1 : 1));   // largest first
     const activity = transfers
@@ -20,7 +24,7 @@ export default async function handler(req, res) {
           .map(({ chain, from, to, amount, type, block, time, tx }) => ({ chain, from, to, amount, type, block, time, tx }))
           .sort((a, b) => b.block - a.block)
       : undefined;
-    res.status(200).json({ token, ledger, editions: supply.get(token) || null, holders, ...(activity ? { activity } : {}) });
+    res.status(200).json({ token, ledger, editions: supply.get(token) || null, holders, pending, ...(activity ? { activity } : {}) });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }

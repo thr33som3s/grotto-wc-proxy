@@ -76,6 +76,28 @@ export function derive(rows) {
   return { holdings, supply };
 }
 
+// Pending mints (ledger tab "pending": collection, token_id, wallet, owed, minted, remaining, source, since).
+// Editions owed to a wallet for a token that hasn't been minted to them yet. Only mints count them down:
+// a transfer of type "mint" (from the zero address) of that token, to that wallet, at or after `since`.
+// Any other transfer leaves pending alone. Several rows for one wallet and token are filled in row order.
+export const PENDING_HEADER = ["collection", "token_id", "wallet", "owed", "minted", "remaining", "source", "since"];
+export function pendingProgress(pending, transferRows) {
+  const mints = new Map();   // "coll:id|wallet" -> [{ t, amount }]
+  for (const r of transferRows) {
+    if (r[7] !== "mint" || String(r[4]).toLowerCase() !== ZERO) continue;
+    const k = `${r[1]}:${r[3]}|${String(r[5]).toLowerCase()}`;
+    (mints.get(k) || mints.set(k, []).get(k)).push({ t: Date.parse(r[9]), amount: Number(r[6]) || 0 });
+  }
+  const used = new Map();
+  return pending.map((p) => {
+    const k = `${p[0]}:${p[1]}|${String(p[2]).toLowerCase()}`, owed = Math.max(0, Number(p[3]) || 0), since = Date.parse(p[7]) || 0;
+    const total = (mints.get(k) || []).filter((m) => m.t >= since).reduce((a, m) => a + m.amount, 0);
+    const minted = Math.min(owed, Math.max(0, total - (used.get(k) || 0)));
+    used.set(k, (used.get(k) || 0) + minted);
+    return [p[0], String(p[1]), String(p[2]).toLowerCase(), owed, minted, owed - minted, p[6] || "", p[7] || ""];
+  });
+}
+
 // Holdings as of a moment: only transfers whose block time is at or before `atIso` count.
 // Used for 3v3nt snapshots, so a snapshot is exact to the second whenever the job gets to it.
 export function holdingsAt(rows, atIso) {

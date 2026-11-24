@@ -1,10 +1,11 @@
 // GET /api/catalog
 // The whole thr33som3s catalog in one cleaned response: all six collections in canonical order,
 // trait values normalized, gen differences merged into one set of trait fields, and trait families applied.
-// Each token carries editions: { minted, burned, circulating, holders } from the on-chain ledger.
+// Each token carries editions: { minted, burned, circulating, holders } from the on-chain ledger, plus
+// { pending, pendingCollectors } while editions owed to collectors haven't been minted to them yet.
 // Query: ?collection=gen2 (one collection only), ?unassigned=1 (include values not yet in a family).
 import { COLLECTIONS, FAMILIES_SHEET, buildCollection, parseFamilies, applyFamilies, IMAGE_FROM_CHAIN, imageUrl } from "./_lib/catalog.js";
-import { readSupply, readState, readImages } from "./_lib/ledger.js";
+import { readSupply, readState, readImages, readPending, pendingByToken } from "./_lib/ledger.js";
 
 const API = "https://sheets.googleapis.com/v4/spreadsheets";
 
@@ -55,9 +56,14 @@ export default async function handler(req, res) {
   // separately, so a new mint that hasn't been added to its sheet shows up instead of disappearing.
   let ledger = null, unlisted = [];
   try {
-    const [supply, state] = await Promise.all([readSupply(KEY), readState(KEY)]);
+    const [supply, state, pendingRows] = await Promise.all([readSupply(KEY), readState(KEY), readPending(KEY)]);
+    const pending = pendingByToken(pendingRows);
     const listed = new Set();
-    for (const t of tokens) { listed.add(t.key); t.editions = supply.get(t.key) || { minted: 0, burned: 0, circulating: 0, holders: 0 }; }
+    for (const t of tokens) {
+      listed.add(t.key);
+      t.editions = { ...(supply.get(t.key) || { minted: 0, burned: 0, circulating: 0, holders: 0 }) };
+      const p = pending.get(t.key); if (p) { t.editions.pending = p.pending; t.editions.pendingCollectors = p.collectors; }   // "pending mint"
+    }
     const wanted = new Set(colls.map((c) => c.key));
     unlisted = [...supply.entries()].filter(([k]) => !listed.has(k) && wanted.has(k.split(":")[0])).map(([key, editions]) => ({ key, editions }));
     ledger = state;
