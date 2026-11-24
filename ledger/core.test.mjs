@@ -40,10 +40,13 @@ test("holdingsAt: only transfers at or before the moment count", () => {
   assert.deepEqual(holdingsAt(rows, "2026-11-13T16:30:22Z"), [["univ3rs3", "93009", A, "2"], ["univ3rs3", "93009", Bw, "1"]]);
   assert.deepEqual(holdingsAt(rows, "2026-11-13T15:00:00Z"), []);
 });
-test("dueSnapshots: time passed plus settle, chains indexed past it, valid tab, not yet taken", () => {
+test("dueSnapshots: a minute after its time, once both chains are recorded past it; valid tab; not yet taken", () => {
   const now = Date.parse("2026-11-13T17:00:00Z"), chains = { ethereum: "2026-11-13T16:59:00Z", base: "2026-11-13T16:59:30Z" };
   const reqs = [{ tab: "snapshot-a", at: "2026-11-13T16:30:00Z" }, { tab: "snapshot-b", at: "2026-11-13T16:55:00Z" },
     { tab: "snapshot-c", at: "2026-11-13T16:00:00Z", status: "taken" }, { tab: "holdings", at: "2026-11-13T16:00:00Z" }];
-  assert.deepEqual(dueSnapshots(reqs, now, chains).map((r) => r.tab), ["snapshot-a"]);
+  assert.deepEqual(dueSnapshots(reqs, now, chains).map((r) => r.tab), ["snapshot-a", "snapshot-b"]);
+  // a minute's grace, and both chains recorded past the time
+  assert.deepEqual(dueSnapshots([{ tab: "snapshot-d", at: "2026-11-13T16:59:30Z" }], now, chains).map((r) => r.tab), []);
+  assert.deepEqual(dueSnapshots([{ tab: "snapshot-e", at: "2026-11-13T16:59:10Z" }], now, chains).map((r) => r.tab), []);   // ethereum only through 16:59:00
   assert.deepEqual(dueSnapshots(reqs, now, { ethereum: "2026-11-13T16:20:00Z" }).map((r) => r.tab), []);
 });

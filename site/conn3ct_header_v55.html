@@ -1931,7 +1931,7 @@ function b3ReadWindow() {
   b3.name = v('c3-b3n').trim();
   b3.intro = v('c3-b3intro').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
   b3.window = { opens: fromLocalInput(v('c3-b3open')), closes: fromLocalInput(v('c3-b3close')) };
-  b3.snapshot = { ...b3.snapshot, at: fromLocalInput(v('c3-b3snapat')) };
+  b3.snapshot = { ...b3.snapshot, at: b3.window.opens ? new Date(Date.parse(b3.window.opens) - 10 * 60000).toISOString() : '' };
   b3Stash();
 }
 function b3Window(note) {
@@ -1941,8 +1941,8 @@ function b3Window(note) {
     <label class="c3-field">intro <span class="c3-note">a blank line between paragraphs</span><textarea id="c3-b3intro" rows="6">${esc((b3.intro || []).join('\n\n'))}</textarea></label>
     <div class="c3-b3row"><label class="c3-field">opens<input type="datetime-local" id="c3-b3open" value="${toLocalInput(b3.window.opens)}"></label>
       <label class="c3-field">closes<input type="datetime-local" id="c3-b3close" value="${toLocalInput(b3.window.closes)}"></label></div>
-    <div class="c3-b3row"><label class="c3-field">snapshot <span class="c3-note">when holder roles count holdings at a snapshot</span><input type="datetime-local" id="c3-b3snapat" value="${toLocalInput(b3.snapshot.at)}"></label>
-      <div class="c3-field"><span>snapshot status</span><span class="c3-note">${esc(b3SnapText())}</span></div></div>
+    <p class="c3-note">publish at least 30 minutes before it opens. holder snapshots are taken 10 minutes before it opens.</p>
+    <div class="c3-field"><span>snapshot</span><span class="c3-note">${esc(b3SnapText())}</span></div>
     <p class="c3-h4">tokens in this 3v3nt: ${b3.tokens.length}</p>
     <div class="c3-b3tiles">${tile('unassigned', 'unassigned')}${tile('hold', 'holder')}${tile('burn', 'burn')}${tile('vault', 'vault')}${tile('cite', 'cite')}</div>
     <div class="c3-actions"><button class="c3-btn c3-primary" id="c3-b3add">add tokens from the grid</button></div>
@@ -1954,15 +1954,16 @@ function b3Window(note) {
   document.getElementById('c3-b3pub').onclick = () => { b3ReadWindow(); return b3Save(b3.status === 'published' ? 'draft' : 'published'); };
   document.getElementById('c3-b3list').onclick = () => { b3ReadWindow(); openBuild3r(); };
 }
-// The ledger job takes the snapshot (tab "snapshot-<id>" in the ledger sheet) about 10 minutes after its time,
-// holdings exact to that second. Status comes from the ledger's "snapshots" tab.
+// The snapshot is always 10 minutes before the 3v3nt opens (tab "snapshot-<id>" in the ledger sheet), holdings exact
+// to that second; the ledger job takes it on its first run once both chains are recorded past it, normally within
+// about 5 minutes. Status comes from the ledger's "snapshots" tab.
 function b3SnapText() {
   const st = b3.snapshotStatus;
-  if (!b3.snapshot.at) return 'no snapshot time set';
-  if (!st) return `not requested yet: saving files the request for ${whenText(b3.snapshot.at)}`;
+  if (!b3.snapshot.at) return 'set when it opens; the snapshot is 10 minutes before that';
+  if (!st) return `${whenText(b3.snapshot.at)}, 10 minutes before it opens. saving files the request`;
   if (st.status === 'taken') return `taken: holdings as of ${whenText(st.at)}, ${st.rows} rows (tab ${b3.snapshot.tab || 'snapshot-' + b3.id})`;
   if (st.status === 'exists') return `a tab named ${b3.snapshot.tab} already existed, so it was left as it is`;
-  return `requested for ${whenText(st.at)}; the ledger job takes it about 10 minutes after that`;
+  return `requested for ${whenText(st.at)}, 10 minutes before it opens; taken on the ledger's first run after that`;
 }
 async function b3Save(status) {
   modalMsg('saving...');

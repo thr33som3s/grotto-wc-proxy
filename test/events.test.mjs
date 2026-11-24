@@ -31,6 +31,9 @@ globalThis.fetch = async (url, opts) => {
   if (u.includes("fields=sheets.properties.title")) return resp({ sheets: [{ properties: { title: "t" } }] });
   throw new Error("unexpected fetch " + u);
 };
+import { mock } from "node:test";
+// The clock: build3r saves happen at 11:00am EST, an hour before the 3v3nt opens (noon); play happens at 1pm EST.
+mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-13T16:00:00Z") });
 const E = await import("../api/_lib/events.js");
 const F = await import("../api/_lib/f13.js");
 const sess = await import("../api/_lib/session.js");
@@ -41,7 +44,7 @@ const call = (method, q, b, wallet) => new Promise((res) => handler({ method, qu
 // Friday the 13th x3, as build3r would save it: the tokens added from the grid, each assigned a role.
 const f13cfg = {
   id: "friday-13-x3", name: "Friday the 13th x3", intro: "para one\n\npara two", status: "published",
-  window: { opens: "2026-11-13T16:00:00Z", closes: "2099-11-14T07:59:59Z" },
+  window: { opens: "2026-11-13T17:00:00Z", closes: "2026-11-14T07:59:59Z" },
   snapshot: { tab: "anything-typed-is-ignored", at: "2026-11-13T16:30:22Z" },
   tokens: [...F.F13_HOLD.map((key) => ({ key, role: "hold" })), ...F.F13_BURN.map((key) => ({ key, role: "burn" })), { key: "univ3rs3:1010", role: null }],
   roles: { hold: { count: "snapshot", claims: 1 }, burn: { claims: 1 } },
@@ -53,14 +56,20 @@ test("clean: f13 rebuilt in build3r matches the hand-coded lists exactly", () =>
   assert.deepEqual(E.roleKeys(config, "hold"), F.F13_HOLD);
   assert.deepEqual(E.roleKeys(config, "burn"), F.F13_BURN);
   assert.deepEqual(config.intro, ["para one", "para two"]);
-  assert.deepEqual(config.snapshot, { tab: "snapshot-friday-13-x3", at: "2026-11-13T16:30:22.000Z" });
+  assert.deepEqual(config.snapshot, { tab: "snapshot-friday-13-x3", at: "2026-11-13T16:50:00.000Z" }, "always 10 minutes before opens; whatever was sent is ignored");
   assert.equal(config.tokens.find((t) => t.key === "univ3rs3:1010").role, null);   // added, unassigned
 });
 test("clean: publishing needs a name, times, a role, and a snapshot tab for snapshot holders", () => {
   const p = E.cleanEvent({ id: "x1", status: "published", tokens: [{ key: "univ3rs3:1", role: "hold" }] }).problems.join(" | ");
-  assert.match(p, /name/); assert.match(p, /opens and closes/); assert.match(p, /set when it's taken/);
+  assert.match(p, /name/); assert.match(p, /opens and closes/);
   assert.match(E.cleanEvent({ id: "Bad Id" }).problems[0], /id/);
   assert.deepEqual(E.cleanEvent({ id: "draft-ok" }).problems, []);   // drafts can be incomplete
+});
+test("clean: published at least 30 minutes before it opens", () => {
+  const base = { ...f13cfg, status: "published" };
+  assert.deepEqual(E.cleanEvent(base, Date.parse("2026-11-13T16:30:00Z")).problems, []);            // exactly 30 minutes: fine
+  assert.match(E.cleanEvent(base, Date.parse("2026-11-13T16:30:01Z")).problems[0], /at least 30 minutes before it opens/);
+  assert.deepEqual(E.cleanEvent({ ...base, status: "draft" }, Date.parse("2026-11-13T16:59:00Z")).problems, []);   // a draft can be saved any time
 });
 test("check: same answers as the f13 rules for holds and burns", () => {
   const { config } = E.cleanEvent(f13cfg);
@@ -93,7 +102,13 @@ test("handler: only thr33s can save; drafts stay hidden; published shows up", as
   assert.equal((await call("GET", { phase: "events", all: "1" }, null, ARTIST)).j.events.length, 1);
   assert.equal((await call("POST", {}, { phase: "build3r", config: f13cfg }, ARTIST)).code, 200);
   const pub = (await call("GET", { phase: "events" }, null)).j.events;
-  assert.equal(pub.length, 1); assert.equal(pub[0].name, "Friday the 13th x3"); assert.equal(pub[0].window.open, true);
+  assert.equal(pub.length, 1); assert.equal(pub[0].name, "Friday the 13th x3"); assert.equal(pub[0].window.open, false, "published an hour ahead: listed, not open yet");
+});
+test("handler: publishing inside the 30-minute cutoff is refused", async () => {
+  mock.timers.setTime(Date.parse("2026-11-13T16:45:00Z"));
+  const r = await call("POST", {}, { phase: "build3r", config: { ...f13cfg, id: "late-one" } }, ARTIST);
+  assert.equal(r.code, 422); assert.match(r.j.error, /30 minutes/);
+  mock.timers.setTime(Date.parse("2026-11-13T18:00:00Z"));   // from here on: during the 3v3nt
 });
 test("handler: until the ledger job takes the snapshot, nobody claims by holding", async () => {
   const g = await call("GET", { phase: "event", id: "friday-13-x3" }, null, ADDR);

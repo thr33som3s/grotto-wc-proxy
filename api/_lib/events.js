@@ -4,7 +4,7 @@
 // A config:
 // { id, name, intro: [paragraph], status: "draft" | "published",
 //   window: { opens, closes },                      ISO times
-//   snapshot: { tab, at },                          a frozen copy of the ledger's holdings (Holder role, "snapshot")
+//   snapshot: { tab, at },                          set by the server: tab "snapshot-<id>", at = 10 minutes before opens
 //   tokens: [{ key, role }],                        every token thr33s added; role null until assigned
 //   roles: {
 //     hold:  { count: "snapshot" | "entry", claims, max },   must hold; nothing moves
@@ -19,6 +19,10 @@ export const ROLES = ["hold", "burn", "vault", "cite"];
 export const ROLE_LABEL = { hold: "holder", burn: "burn", vault: "vault", cite: "cite" };
 export const DEST = { burn: "333burn", vault: "3vault" };
 export const ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+// thr33s's rules: the snapshot is taken 10 minutes before the 3v3nt opens; a 3v3nt must be published at least
+// 30 minutes before it opens.
+export const SNAPSHOT_BEFORE_MS = 10 * 60 * 1000;
+export const PUBLISH_CUTOFF_MS = 30 * 60 * 1000;
 
 export function blankEvent(id, name = "") {
   return { id, name, intro: [], status: "draft", window: { opens: "", closes: "" }, snapshot: { tab: "", at: "" }, tokens: [],
@@ -26,16 +30,17 @@ export function blankEvent(id, name = "") {
 }
 
 // Cleans a config sent from build3r. Returns { config, problems }.
-export function cleanEvent(c) {
+export function cleanEvent(c, now = Date.now()) {
   const problems = [];
   const id = String(c?.id || "").toLowerCase();
   if (!ID_RE.test(id)) problems.push("the 3v3nt id must be 2–41 lowercase letters, numbers or hyphens");
   const out = blankEvent(id, String(c?.name || "").slice(0, 120));
   out.intro = (Array.isArray(c?.intro) ? c.intro : String(c?.intro || "").split(/\n\s*\n/)).map((p) => String(p).trim()).filter(Boolean).slice(0, 30);
   out.status = c?.status === "published" ? "published" : "draft";
-  out.window = { opens: String(c?.window?.opens || ""), closes: String(c?.window?.closes || "") };
-  // The snapshot's tab is always "snapshot-<id>" in the ledger sheet; the ledger job takes it, exact to the second.
-  out.snapshot = { tab: `snapshot-${id}`, at: Date.parse(c?.snapshot?.at) ? new Date(c.snapshot.at).toISOString() : "" };
+  const iso = (v) => (Date.parse(v) ? new Date(v).toISOString() : "");
+  out.window = { opens: iso(c?.window?.opens), closes: iso(c?.window?.closes) };
+  // The snapshot's tab is always "snapshot-<id>" in the ledger sheet; its time is always 10 minutes before opens.
+  out.snapshot = { tab: `snapshot-${id}`, at: out.window.opens ? new Date(Date.parse(out.window.opens) - SNAPSHOT_BEFORE_MS).toISOString() : "" };
   const seen = new Set();
   for (const t of Array.isArray(c?.tokens) ? c.tokens : []) {
     const key = String(t?.key || "");
@@ -52,8 +57,8 @@ export function cleanEvent(c) {
   if (out.status === "published") {
     if (!out.name) problems.push("give the 3v3nt a name before publishing");
     if (!(Date.parse(out.window.opens) < Date.parse(out.window.closes))) problems.push("set when the 3v3nt opens and closes");
+    else if (Date.parse(out.window.opens) - now < PUBLISH_CUTOFF_MS) problems.push("a 3v3nt has to be published at least 30 minutes before it opens");
     if (!out.tokens.some((t) => t.role)) problems.push("assign at least one token to a role");
-    if (out.tokens.some((t) => t.role === "hold") && out.roles.hold.count === "snapshot" && !out.snapshot.at) problems.push("the holder role counts a snapshot: set when it's taken");
   }
   return { config: out, problems };
 }

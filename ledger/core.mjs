@@ -104,10 +104,10 @@ export function holdingsAt(rows, atIso) {
   const at = Date.parse(atIso);
   return derive(rows.filter((r) => r[9] && Date.parse(r[9]) <= at)).holdings;
 }
-// Snapshot requests (ledger tab "snapshots": tab, at, status, taken_at, rows). One is due once its time has
-// passed by SNAPSHOT_SETTLE_MS, so both chains' confirmation lag has certainly been indexed.
+// Snapshot requests (ledger tab "snapshots": tab, at, status, taken_at, rows). One is due once both chains have been
+// recorded past its time and a minute has passed, so every transfer up to that second is in.
 export const SNAPSHOT_HEADER = ["tab", "at", "status", "taken_at", "rows"];
-export const SNAPSHOT_SETTLE_MS = 10 * 60 * 1000;
+export const SNAPSHOT_SETTLE_MS = 60 * 1000;   // plus: both chains must be recorded past the snapshot time
 export const SNAPSHOT_TAB_RE = /^snapshot-[a-z0-9-]{1,60}$/;
 export function dueSnapshots(requests, now, chainsDoneThrough) {
   return requests.filter((r) => r.tab && SNAPSHOT_TAB_RE.test(r.tab) && r.status !== "taken" && Date.parse(r.at) + SNAPSHOT_SETTLE_MS <= now

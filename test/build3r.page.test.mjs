@@ -105,13 +105,13 @@ d.getElementById('c3-b3back').onclick();
 d.querySelector('[data-b3role="cite"]').onclick(); d.getElementById('c3-b3claims').value = '0'; d.getElementById('c3-b3max').value = '1'; d.getElementById('c3-b3back').onclick();
 d.getElementById('c3-b3intro').value = 'para one\n\npara two';
 d.getElementById('c3-b3open').value = '2026-11-13T11:00'; d.getElementById('c3-b3close').value = '2026-11-14T02:59';
-d.getElementById('c3-b3snapat').value = '2026-11-13T11:30';
-assert.match(d.getElementById('c3-modal-body').innerHTML, /no snapshot time set/);
+assert.doesNotMatch(d.getElementById('c3-modal-body').innerHTML, /c3-b3snapat/, 'no separate snapshot field');
+assert.match(d.getElementById('c3-modal-body').innerHTML, /publish at least 30 minutes before it opens/);
 await d.getElementById('c3-b3pub').onclick();
 const cfg = saved.at(-1).config;
 assert.equal(saved.at(-1).phase, 'build3r'); assert.equal(cfg.status, 'published'); assert.equal(JSON.stringify(cfg.intro), '["para one","para two"]');
-assert.equal(cfg.roles.cite.claims, 0); assert.equal(cfg.roles.cite.max, 1); assert.equal(cfg.roles.hold.count, 'snapshot'); assert.equal(cfg.snapshot.tab, 'snapshot-friday-the-13th-x3'); assert.ok(cfg.snapshot.at.endsWith('Z'));
-assert.match(d.getElementById('c3-modal-body').innerHTML, /requested for .*the ledger job takes it about 10 minutes after that/);
+assert.equal(cfg.roles.cite.claims, 0); assert.equal(cfg.roles.cite.max, 1); assert.equal(cfg.roles.hold.count, 'snapshot'); assert.equal(cfg.snapshot.tab, 'snapshot-friday-the-13th-x3'); assert.equal(Date.parse(cfg.window.opens) - Date.parse(cfg.snapshot.at), 10 * 60000, 'snapshot 10 minutes before opening');
+assert.match(d.getElementById('c3-modal-body').innerHTML, /requested for .*10 minutes before it opens; taken on the ledger's first run after that/);
 assert.ok(cfg.window.opens.endsWith('Z') && Date.parse(cfg.window.closes) > Date.parse(cfg.window.opens));
 assert.match(d.getElementById('c3-modal-body').innerHTML, /published/);
 
