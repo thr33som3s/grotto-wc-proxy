@@ -2,7 +2,7 @@
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import assert from "assert/strict";
-const html = fs.readFileSync("/home/claude/repo/site/conn3ct_header_v55.html", "utf8");
+const html = fs.readFileSync("/home/claude/repo/site/conn3ct_header_v56.html", "utf8");
 const js = html.split("<script>")[1].split("</script>")[0];
 const dom = new JSDOM(`<div class="c-view-bar"><button id="view-all"></button><button id="view-mine"></button></div><div id="wallet-pill"><span id="wallet-addr"></span><button id="disconnect-btn"></button></div><input id="search-input"><div id="c-grid"></div><div id="c-lb"><img id="lb-img"><div id="lb-data"></div></div><div id="results-count"></div>`, { runScripts: "outside-only", url: "https://thr33som3s.com/conn3ct" });
 const w = dom.window, d = w.document; w.HTMLElement.prototype.scrollIntoView = () => {};
@@ -85,8 +85,26 @@ assert.match(d.getElementById('c3-modal-body').innerHTML, /tokens in this 3v3nt:
 d.querySelector('[data-b3role="unassigned"]').onclick();
 assert.ok(d.getElementById('c3-modal').classList.contains('c3-wide'));
 assert.equal(d.querySelectorAll('[data-b3move]').length, 23);
+assert.match(d.getElementById('c3-b3selcount').textContent, /0 of 23 selected/);
+// select several cards by clicking them, then assign them at once
+const pick = (k) => d.querySelector(`[data-b3sel="${k}"]`).onclick();
+[...SHAYNA, 'univ3rs3:70071', 'bulk:319027'].forEach(pick);
+assert.match(d.getElementById('c3-b3selcount').textContent, /9 of 23 selected/);
+pick('bulk:9'); pick('bulk:9');   // click twice: unselected, selected again
+assert.ok(d.querySelector('[data-b3sel="bulk:9"]').classList.contains('c3-sel'));
+assert.match(d.querySelector('[data-b3sel="bulk:9"]').innerHTML, /selected ✓/);
+d.getElementById('c3-b3all').value = 'burn'; d.getElementById('c3-b3allgo').onclick();
+assert.equal(d.querySelectorAll('[data-b3move]').length, 14, '9 burns assigned, 14 left');
+assert.match(d.getElementById('c3-b3selcount').textContent, /0 of 14 selected/);
+// assigning with nothing selected says so and changes nothing
+d.getElementById('c3-b3allgo').onclick();
+assert.match(d.getElementById('c3-msg').textContent, /select some cards first/); assert.equal(d.querySelectorAll('[data-b3move]').length, 14);
+// the single-card dropdown still works, and clicking it doesn't select the card
 const mv = (k, r) => { const s = d.querySelector(`[data-b3move="${k}"]`); s.value = r; s.onchange(); };
-[...SHAYNA, 'univ3rs3:70071', 'bulk:319027'].forEach(k => mv(k, 'burn')); mv('thr33zi3s:9', 'cite');
+mv('thr33zi3s:9', 'cite');
+// select all, then assign the rest to holder
+d.getElementById('c3-b3selall').onclick();
+assert.match(d.getElementById('c3-b3selcount').textContent, /13 of 13 selected/);
 d.getElementById('c3-b3all').value = 'hold'; d.getElementById('c3-b3allgo').onclick();
 assert.equal(d.querySelectorAll('[data-b3move]').length, 0);
 d.getElementById('c3-b3back').onclick();
@@ -104,6 +122,8 @@ d.getElementById('c3-b3claims').value = '1'; d.getElementById('c3-b3max').value 
 d.getElementById('c3-b3back').onclick();
 d.querySelector('[data-b3role="cite"]').onclick(); d.getElementById('c3-b3claims').value = '0'; d.getElementById('c3-b3max').value = '1'; d.getElementById('c3-b3back').onclick();
 d.getElementById('c3-b3intro').value = 'para one\n\npara two';
+let picked = 0; const op = d.getElementById('c3-b3open'); op.showPicker = () => { picked++; }; op.dispatchEvent(new w.Event('click'));
+assert.equal(picked, 1, 'clicking opens brings up the calendar');
 d.getElementById('c3-b3open').value = '2026-11-13T11:00'; d.getElementById('c3-b3close').value = '2026-11-14T02:59';
 assert.doesNotMatch(d.getElementById('c3-modal-body').innerHTML, /c3-b3snapat/, 'no separate snapshot field');
 assert.match(d.getElementById('c3-modal-body').innerHTML, /publish at least 30 minutes before it opens/);
