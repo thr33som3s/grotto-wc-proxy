@@ -316,10 +316,12 @@ async function events(req, res, phase, wallet, KEY) {
   const lists = await Promise.all(eventCollections(cfg).map((c) => collectionTokens(KEY, c).catch(() => [])));
   const all = new Map(lists.flat().map((t) => [t.key, t]));
   const card = (k) => { const t = all.get(k); return { key: k, name: t ? t.name : k, image: t ? t.image || "" : "" }; };
-  // Snapshot holders: until the ledger job has taken the snapshot, nobody can claim by holding.
-  const snapReady = !usesSnapshot(cfg) || TEST_MODE || ((await readSnapshotRequests(KEY)).get(cfg.snapshot.tab) || {}).status === "taken";
+  // Snapshot holders: until the ledger job has taken the snapshot, nobody can claim by holding. A rehearsal (preview)
+  // doesn't wait: until a real snapshot exists, it counts holder pieces from current holdings.
+  const snapTaken = usesSnapshot(cfg) && ((await readSnapshotRequests(KEY)).get(cfg.snapshot.tab) || {}).status === "taken";
+  const snapReady = !usesSnapshot(cfg) || snapTaken || TEST_MODE;
   win.snapshotReady = snapReady;
-  const holdRows = async () => !snapReady ? [] : cfg.roles.hold.count === "snapshot" ? readSnapshot(cfg.snapshot.tab, KEY) : readHoldings(KEY);
+  const holdRows = async () => (!usesSnapshot(cfg) || (TEST_MODE && !snapTaken)) ? readHoldings(KEY) : snapTaken ? readSnapshot(cfg.snapshot.tab, KEY) : [];
   if (req.method === "GET") {
     const out = { id: cfg.id, name: cfg.name, intro: cfg.intro, window: win, roles: cfg.roles,
       tokens: Object.fromEntries(["hold", "burn", "vault", "cite"].map((r) => [r, roleKeys(cfg, r).map(card)])) };
