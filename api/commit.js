@@ -340,7 +340,7 @@ async function events(req, res, phase, wallet, KEY) {
         const from = TEST_MODE ? Date.parse(out.entry.submitted_at) : Date.parse(cfg.window.opens);
         const sent = sentTo(moves(out.entry.payload), wallet, await readTransfers(KEY), from, TEST_MODE ? Infinity : Date.parse(cfg.window.closes));
         out.sent = Object.fromEntries(Object.entries(sent).map(([k, v]) => [k, v.sent]));
-        out.confirmed = confirmedClaims(cfg, out.entry.payload, sent, new Map(Object.entries(out.entry.payload.heldCounts || {})));
+        out.confirmed = confirmedClaims(cfg, out.entry.payload, sent);
       }
     }
     return res.status(200).json(out);
@@ -359,21 +359,22 @@ async function events(req, res, phase, wallet, KEY) {
   const counted = heldCounts(cfg, hrows, wallet);
   if (TEST_MODE) for (const k of roleKeys(cfg, "hold")) if (!counted.has(k)) counted.set(k, 1);   // rehearsal: any holder piece counts as 1 held
   const held = new Set(counted.keys());
-  // Holder rules count editions held; what was counted goes into the entry (and the signed message) as heldCounts.
-  payload.heldCounts = Object.fromEntries(payload.hold.map((k) => [k, counted.get(k) || 0]));
+  // The collector chooses how many of the editions they held to claim with (up to what they held); what they held
+  // is kept with the entry as heldCounts.
+  payload.heldCounts = Object.fromEntries(payload.hold.map((x) => [x.key, counted.get(x.key) || 0]));
   const heldN = new Map(Object.entries(payload.heldCounts));
   const live = TEST_MODE ? { get: () => 999 } : new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
   const problems = checkEntry(cfg, payload, held, live, heldN);
   if (problems.length) return res.status(422).json({ error: problems[0], problems });
-  const names = Object.fromEntries([...payload.hold, ...payload.cite, ...payload.burn.map((x) => x.key), ...payload.vault.map((x) => x.key)].map((k) => [k, card(k).name]));
+  const names = Object.fromEntries([...payload.hold.map((x) => x.key), ...payload.cite, ...payload.burn.map((x) => x.key), ...payload.vault.map((x) => x.key)].map((k) => [k, card(k).name]));
   if (!b.signature) {
     const issuedAt = new Date().toISOString();
-    const o = entryClaims(cfg, payload, heldN);
-    return res.status(200).json({ issuedAt, message: entryMessage(cfg, wallet, payload, names, issuedAt, heldN), claims: o.claims, entries: o.entries });
+    const o = entryClaims(cfg, payload);
+    return res.status(200).json({ issuedAt, message: entryMessage(cfg, wallet, payload, names, issuedAt), claims: o.claims, entries: o.entries });
   }
   const age = Date.now() - Date.parse(b.issuedAt);
   if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
-  const message = entryMessage(cfg, wallet, payload, names, b.issuedAt, heldN);
+  const message = entryMessage(cfg, wallet, payload, names, b.issuedAt);
   if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
   const r = await store("put_commitment", { phase: stored, wallet, username: profile.username, payload, signature: b.signature, message, index: null });
   if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your entry; it is final" : r.error });

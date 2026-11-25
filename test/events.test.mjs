@@ -74,14 +74,15 @@ test("clean: published at least 30 minutes before it opens", () => {
 test("check: the default rules give the same answers as the f13 rules", () => {
   const { config } = E.cleanEvent(f13cfg);
   const held = new Set(["univ3rs3:93009"]), live = new Map([["univ3rs3:70069", 5]]);
-  assert.deepEqual(E.checkEntry(config, E.cleanPayload({ hold: ["univ3rs3:93009"], burn: [{ key: "univ3rs3:70069", qty: 5 }] }), held, live, new Map([["univ3rs3:93009", 3]])), []);
-  assert.match(E.checkEntry(config, E.cleanPayload({ hold: ["univ3rs3:34235"] }), held, live)[0], /snapshot/);
+  assert.deepEqual(E.checkEntry(config, E.cleanPayload({ hold: [{ key: "univ3rs3:93009", qty: 1 }], burn: [{ key: "univ3rs3:70069", qty: 5 }] }), held, live, new Map([["univ3rs3:93009", 3]])), []);
+  assert.match(E.checkEntry(config, E.cleanPayload({ hold: [{ key: "univ3rs3:34235", qty: 1 }] }), held, live)[0], /snapshot/);
   assert.match(E.checkEntry(config, E.cleanPayload({ burn: [{ key: "univ3rs3:70069", qty: 6 }] }), held, live)[0], /hold only 5/);
   assert.match(E.checkEntry(config, E.cleanPayload({}), held, live)[0], /at least one/);
-  const p = E.cleanPayload({ hold: ["univ3rs3:93009", "gen2:1019"], burn: [{ key: "univ3rs3:70069", qty: 3 }, { key: "bulk:9", qty: 2 }] });
-  // holding 6 editions of #009A still earns one claim: one per unique token held, as on Friday the 13th
-  const o = E.entryClaims(config, p, new Map([["univ3rs3:93009", 6], ["gen2:1019", 1]]));
-  assert.deepEqual(o, { claims: F.f13Claims({ holds: p.hold, burns: p.burn }), entries: 0 });
+  const p = E.cleanPayload({ hold: [{ key: "univ3rs3:93009", qty: 1 }, { key: "gen2:1019", qty: 1 }], burn: [{ key: "univ3rs3:70069", qty: 3 }, { key: "bulk:9", qty: 2 }] });
+  // one claim per unique token held, as on Friday the 13th: the default holder rule allows at most 1 per token
+  assert.deepEqual(E.entryClaims(config, p), { claims: F.f13Claims({ holds: p.hold.map((x) => x.key), burns: p.burn }), entries: 0 });
+  const six = E.cleanPayload({ hold: [{ key: "univ3rs3:93009", qty: 6 }] });
+  assert.match(E.checkEntry(config, six, held, live, new Map([["univ3rs3:93009", 6]]))[0], /at most 1 claims/, "holding 6 still allows only 1 claim by default");
 });
 
 // thr33s's rules: N → M claims or entries, per token or as a group, caps on what goes in and what comes out.
@@ -128,14 +129,22 @@ test("rules: vault works the same way, and shares the balance with burn", () => 
   assert.deepEqual(res(cfg, { vault: [{ key: "univ3rs3:4", qty: 4 }] }), { claims: 0, entries: 6 });
   assert.match(chk(cfg, { vault: [{ key: "univ3rs3:4", qty: 3 }] })[0], /send to 3vault in multiples of 2/);
 });
-test("rules: holder counts whole multiples of what was held, caps trim", () => {
+test("rules: holder claims are chosen, from 0 up to what was held, like burn and vault", () => {
   const cfg = rulesCfg([{ role: "hold", scope: "token", keys: ["univ3rs3:5"], n: 3, m: 2, unit: "claims", maxOut: null }]);
-  assert.deepEqual(res(cfg, { hold: ["univ3rs3:5"] }, new Map([["univ3rs3:5", 7]])), { claims: 4, entries: 0 }, "7 held counts 6 → 4");
+  const h7 = new Map([["univ3rs3:5", 7]]);
+  assert.deepEqual(chk(cfg, { hold: [{ key: "univ3rs3:5", qty: 3 }] }, h7), [], "held 7, claims with 3");
+  assert.deepEqual(res(cfg, { hold: [{ key: "univ3rs3:5", qty: 3 }] }), { claims: 2, entries: 0 });
+  assert.deepEqual(res(cfg, { hold: [{ key: "univ3rs3:5", qty: 6 }] }), { claims: 4, entries: 0 });
+  assert.match(chk(cfg, { hold: [{ key: "univ3rs3:5", qty: 4 }] }, h7)[0], /hold in multiples of 3/);
+  assert.match(chk(cfg, { hold: [{ key: "univ3rs3:5", qty: 9 }] }, h7)[0], /held only 7 of univ3rs3:5/);
+  assert.deepEqual(E.cleanPayload({ hold: [{ key: "univ3rs3:5", qty: 0 }] }).hold, [], "0 means not claimed");
   const capped = rulesCfg([{ role: "hold", scope: "token", keys: ["univ3rs3:5"], n: 1, m: 1, unit: "entries", maxIn: 5, maxOut: null }]);
-  assert.deepEqual(res(capped, { hold: ["univ3rs3:5"] }, new Map([["univ3rs3:5", 9]])), { claims: 0, entries: 5 });
+  assert.match(chk(capped, { hold: [{ key: "univ3rs3:5", qty: 6 }] }, new Map([["univ3rs3:5", 9]]))[0], /hold at most 5/);
   const grp = rulesCfg([{ role: "hold", scope: "group", keys: ["univ3rs3:5", "univ3rs3:6"], n: 2, m: 1, unit: "claims", maxOut: 2 }]);
-  assert.deepEqual(res(grp, { hold: ["univ3rs3:5", "univ3rs3:6"] }, new Map([["univ3rs3:5", 3], ["univ3rs3:6", 4]])), { claims: 2, entries: 0 }, "7 together → 3, capped at 2");
-  assert.deepEqual(chk(grp, { hold: ["univ3rs3:5"] }, new Map([["univ3rs3:5", 1]])), [], "holding too few earns nothing but isn't refused");
+  const hg = new Map([["univ3rs3:5", 3], ["univ3rs3:6", 4]]);
+  assert.deepEqual(chk(grp, { hold: [{ key: "univ3rs3:5", qty: 1 }, { key: "univ3rs3:6", qty: 3 }] }, hg), [], "1 + 3 = 4 together → 2");
+  assert.deepEqual(res(grp, { hold: [{ key: "univ3rs3:5", qty: 1 }, { key: "univ3rs3:6", qty: 3 }] }), { claims: 2, entries: 0 });
+  assert.match(chk(grp, { hold: [{ key: "univ3rs3:5", qty: 3 }, { key: "univ3rs3:6", qty: 3 }] }, hg)[0], /group A: hold at most 2 claims/);
 });
 test("rules: cite is one per card; a cite group can ask for N cards together", () => {
   const cfg = rulesCfg([{ role: "cite", scope: "token", keys: ["thr33zi3s:7"], n: 4, m: 3, unit: "entries" }]);
@@ -182,7 +191,7 @@ test("handler: publishing inside the 30-minute cutoff is refused", async () => {
 test("handler: until the ledger job takes the snapshot, nobody claims by holding", async () => {
   const g = await call("GET", { phase: "event", id: "friday-13-x3" }, null, ADDR);
   assert.equal(g.j.window.snapshotReady, false); assert.deepEqual(g.j.held, []);
-  const r = await call("POST", {}, { phase: "event", id: "friday-13-x3", hold: ["univ3rs3:93009"] }, ADDR);
+  const r = await call("POST", {}, { phase: "event", id: "friday-13-x3", hold: [{ key: "univ3rs3:93009", qty: 1 }] }, ADDR);
   assert.equal(r.code, 409); assert.match(r.j.error, /snapshot hasn't been taken/);
   const art = await call("GET", { phase: "events", all: "1" }, null, ARTIST);
   assert.equal(art.j.events[0].snapshotStatus.status, "pending");
@@ -194,7 +203,7 @@ test("handler: the f13 game end to end through the generic runtime", async () =>
   assert.deepEqual(g.j.held.sort(), ["gen2:1019", "univ3rs3:93009"]);
   assert.deepEqual(g.j.balances, { "univ3rs3:70069": 5, "bulk:9": 2 });
   assert.equal(g.j.tokens.hold.length, 13); assert.equal(g.j.tokens.burn.length, 9);
-  const entry = { phase: "event", id: "friday-13-x3", hold: ["univ3rs3:93009", "gen2:1019"], burn: [{ key: "univ3rs3:70069", qty: 3 }, { key: "bulk:9", qty: 2 }] };
+  const entry = { phase: "event", id: "friday-13-x3", hold: [{ key: "univ3rs3:93009", qty: 1 }, { key: "gen2:1019", qty: 1 }], burn: [{ key: "univ3rs3:70069", qty: 3 }, { key: "bulk:9", qty: 2 }] };
   const prep = await call("POST", {}, entry, ADDR);
   assert.equal(prep.code, 200); assert.equal(prep.j.claims, 7); assert.equal(prep.j.entries, 0); assert.match(prep.j.message, /Friday the 13th x3/);
   const ok = await call("POST", {}, { ...entry, issuedAt: prep.j.issuedAt, signature: await W.signMessage(prep.j.message) }, ADDR);

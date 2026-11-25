@@ -29,10 +29,9 @@ export const PUBLISH_CUTOFF_MS = 30 * 60 * 1000;
 // in (maxIn: editions burned / sent / held, or cards cited) and on what comes out (maxOut: claims or entries).
 // Blank caps mean no maximum. A rule covers one token ("token") or several together ("group"); a token is in at
 // most one rule, and tokens with no rule follow their role's default rule, applied per token.
-//   burn, vault: only in multiples of N; the cap on what goes in, or on what comes out, is a hard limit.
+//   hold, burn, vault: the collector chooses how many editions to put in (hold: from 0 up to what they held; never
+//                all by default), only in multiples of N; caps on what goes in and what comes out are hard limits.
 //   cite:        per token N is 1 (a card is cited once); a group can ask for N cards cited together.
-//   hold:        what a collector held is counted in whole multiples of N (holding 7 at "3 → 2" counts 6, earns 4);
-//                caps trim rather than refuse, since holding isn't an amount anyone chooses.
 // Defaults: 1 → 1 claim, no caps; holder 1 → 1 claim with at most 1 claim per token (one per unique token held).
 export const UNITS = ["claims", "entries"];
 const ROLE_DEFAULT = {
@@ -142,17 +141,19 @@ export function heldCounts(cfg, rows, wallet) {
   return out;
 }
 
-// payload: { hold: [key], burn: [{ key, qty }], vault: [{ key, qty }], cite: [key] }
+// payload: { hold: [{ key, qty }], burn: [{ key, qty }], vault: [{ key, qty }], cite: [key] }
+// hold qty = how many of the editions held the collector claims with (0 means not claimed).
 export function cleanPayload(b) {
   const keys = (a) => (Array.isArray(a) ? a.map(String) : []);
   const qtys = (a) => (Array.isArray(a) ? a : []).filter((x) => Number(x?.qty) > 0).map((x) => ({ key: String(x.key), qty: Number(x.qty) }));
-  return { hold: keys(b.hold), burn: qtys(b.burn), vault: qtys(b.vault), cite: keys(b.cite) };
+  return { hold: qtys(b.hold), burn: qtys(b.burn), vault: qtys(b.vault), cite: keys(b.cite) };
 }
 
-// What one rule gives for what was put in. hold trims to whole multiples and to the caps; the others are checked.
-function applyRule(r, units) {
+// What one rule gives for what was put in: only whole multiples of N, within the caps (else a problem).
+// trim: for amounts still arriving, pay only whole multiples within the caps and report nothing.
+function applyRule(r, units, trim = false) {
   let u = units;
-  if (r.role === "hold") {
+  if (trim) {
     if (r.maxIn !== null && r.maxIn !== undefined) u = Math.min(u, r.maxIn);
     u = Math.floor(u / r.n) * r.n;
     let out = (u / r.n) * r.m;
@@ -166,17 +167,16 @@ function applyRule(r, units) {
   if (r.maxOut !== null && r.maxOut !== undefined && out > r.maxOut) problems.push(`at most ${r.maxOut} ${r.unit}`);
   return { in: u, out, problems };
 }
-// Units each token puts in: hold = editions held (if claimed), cite = 1 (if cited), burn/vault = the amount chosen.
-function unitsFor(role, p, heldN) {
-  if (role === "hold") return new Map(p.hold.map((k) => [k, heldN.get(k) || 0]));
+// Units each token puts in: cite = 1 (if cited); hold, burn, vault = the amount chosen.
+function unitsFor(role, p) {
   if (role === "cite") return new Map(p.cite.map((k) => [k, 1]));
   const m = new Map(); for (const x of p[role]) m.set(x.key, (m.get(x.key) || 0) + x.qty); return m;
 }
 // The result of an entry: { claims, entries, lines: [{ role, keys, label, rule, in, out, unit }], problems }.
-export function outcome(cfg, p, heldN = new Map()) {
+export function outcome(cfg, p) {
   const res = { claims: 0, entries: 0, lines: [], problems: [] };
   for (const role of ROLES) {
-    const units = unitsFor(role, p, heldN);
+    const units = unitsFor(role, p);
     if (!units.size) continue;
     for (const b of ruleBuckets(cfg, role)) {
       const u = b.keys.reduce((a, k) => a + (units.get(k) || 0), 0);
@@ -196,11 +196,13 @@ export function checkEntry(cfg, p, held, live, heldN = new Map()) {
   const out = [];
   const pool = Object.fromEntries(ROLES.map((r) => [r, new Set(roleKeys(cfg, r))]));
   const twice = (list, what) => { const s = new Set(); for (const k of list) { if (s.has(k)) out.push(`${k} is ${what} twice`); s.add(k); } };
-  for (const k of p.hold) {
-    if (!pool.hold.has(k)) out.push(`${k} isn't a holder token in this 3v3nt`);
-    else if (!held.has(k)) out.push(cfg.roles.hold.count === "snapshot" ? `your wallet didn't hold ${k} at the snapshot` : `your wallet doesn't hold ${k}`);
+  for (const x of p.hold) {
+    if (!pool.hold.has(x.key)) out.push(`${x.key} isn't a holder token in this 3v3nt`);
+    else if (!held.has(x.key)) out.push(cfg.roles.hold.count === "snapshot" ? `your wallet didn't hold ${x.key} at the snapshot` : `your wallet doesn't hold ${x.key}`);
+    else if (!Number.isInteger(x.qty) || x.qty < 1) out.push(`choose a whole number of ${x.key}`);
+    else if (x.qty > (heldN.get(x.key) || 0)) out.push(cfg.roles.hold.count === "snapshot" ? `you held only ${heldN.get(x.key) || 0} of ${x.key} at the snapshot` : `you hold only ${heldN.get(x.key) || 0} of ${x.key}`);
   }
-  twice(p.hold, "cited");
+  twice(p.hold.map((x) => x.key), "claimed");
   const need = new Map();   // editions sent anywhere, per token: burn and vault draw on the same balance
   for (const r of ["burn", "vault"]) {
     for (const x of p[r]) {
@@ -213,51 +215,50 @@ export function checkEntry(cfg, p, held, live, heldN = new Map()) {
   for (const [k, q] of need) if (q > (live.get(k) || 0)) out.push(`you hold only ${live.get(k) || 0} of ${k}`);
   for (const k of p.cite) if (!pool.cite.has(k)) out.push(`${k} can't be cited in this 3v3nt`);
   twice(p.cite, "cited");
-  if (!out.length) out.push(...outcome(cfg, p, heldN).problems);
+  if (!out.length) out.push(...outcome(cfg, p).problems);
   if (!ROLES.some((r) => p[r].length)) out.push("choose at least one token");
   return out;
 }
 
 // { claims, entries } if everything sent arrives.
-export function entryClaims(cfg, p, heldN = new Map()) { const o = outcome(cfg, p, heldN); return { claims: o.claims, entries: o.entries }; }
+export function entryClaims(cfg, p) { const o = outcome(cfg, p); return { claims: o.claims, entries: o.entries }; }
 
 // What moves on-chain: [{ key, dest, qty }]
 export const moves = (p) => [...p.burn.map((x) => ({ key: x.key, dest: DEST.burn, qty: x.qty })), ...p.vault.map((x) => ({ key: x.key, dest: DEST.vault, qty: x.qty }))];
 
 // sent: { "key>dest": { sent } } from sentTo. Burns and vaults count only up to the amount committed, and a rule
 // only pays out on what has arrived (a group of 3 → 2 pays nothing until all 3 are in).
-export function confirmedClaims(cfg, p, sent, heldN = new Map()) {
+export function confirmedClaims(cfg, p, sent) {
   const arrived = {};
   const pa = { ...p, burn: [], vault: [] };
   for (const r of ["burn", "vault"]) for (const x of p[r]) {
     const k = `${x.key}>${DEST[r]}`, s = Math.min(x.qty, (sent[k] || {}).sent || 0);
     arrived[k] = s; if (s > 0) pa[r].push({ key: x.key, qty: s });
   }
-  const all = outcome(cfg, p, heldN), now = outcomeLenient(cfg, pa, heldN);
+  const all = outcome(cfg, p), now = outcomeLenient(cfg, pa);
   return { arrived, claims: now.claims, entries: now.entries, pending: all.claims - now.claims, pendingEntries: all.entries - now.entries };
 }
 // Like outcome, but what has arrived so far pays only its whole multiples (no refusals: it's partway there).
-function outcomeLenient(cfg, p, heldN) {
+function outcomeLenient(cfg, p) {
   const res = { claims: 0, entries: 0 };
   for (const role of ROLES) {
-    const units = unitsFor(role, p, heldN);
+    const units = unitsFor(role, p);
     for (const b of ruleBuckets(cfg, role)) {
-      let u = b.keys.reduce((a, k) => a + (units.get(k) || 0), 0);
+      const u = b.keys.reduce((a, k) => a + (units.get(k) || 0), 0);
       if (!u) continue;
-      if (role !== "hold" && b.maxIn !== null && b.maxIn !== undefined) u = Math.min(u, b.maxIn);
-      const r = applyRule({ ...b, role: "hold" }, u);   // whole multiples, caps trimmed
+      const r = applyRule(b, u, true);   // whole multiples, caps trimmed
       res[b.unit] += r.out;
     }
   }
   return res;
 }
 
-export function entryMessage(cfg, wallet, p, names, issuedAt, heldN = new Map()) {
+export function entryMessage(cfg, wallet, p, names, issuedAt) {
   const nm = (k) => names[k] || k;
-  const o = outcome(cfg, p, heldN);
-  const verb = { hold: "held", cite: "cited", burn: "to burn at 333burn", vault: "to 3vault" };
+  const o = outcome(cfg, p);
+  const verb = { hold: "claimed by holding", cite: "cited", burn: "to burn at 333burn", vault: "to 3vault" };
   const lines = o.lines.map((l) => `  ${verb[l.role]}: ${l.label ? `${l.label} (${l.keys.map(nm).join(", ")})` : nm(l.keys[0])}`
-    + `${l.role === "burn" || l.role === "vault" ? " x" + l.in : l.role === "hold" ? ` (${l.in} counted)` : ""} [${l.rule}] → ${l.out} ${l.unit}`);
+    + `${l.role === "cite" ? "" : " x" + l.in} [${l.rule}] → ${l.out} ${l.unit}`);
   return `thr33som3s 3v3nt: ${cfg.name}\nentry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${lines.join("\n")}\n\n`
     + `if everything sent arrives by the close: ${o.claims} claim${o.claims !== 1 ? "s" : ""}, ${o.entries} entr${o.entries !== 1 ? "ies" : "y"} on the wheel\n\nSigning is free and moves nothing now.`;
 }
