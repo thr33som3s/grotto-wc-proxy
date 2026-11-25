@@ -24,9 +24,41 @@ export const ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 export const SNAPSHOT_BEFORE_MS = 10 * 60 * 1000;
 export const PUBLISH_CUTOFF_MS = 30 * 60 * 1000;
 
+// ── Rules (thr33s's): every role uses the same mechanism ─────────
+// A rule: put in N → get M claims or M entries (entries on the wheel), with optional caps per collector on what goes
+// in (maxIn: editions burned / sent / held, or cards cited) and on what comes out (maxOut: claims or entries).
+// Blank caps mean no maximum. A rule covers one token ("token") or several together ("group"); a token is in at
+// most one rule, and tokens with no rule follow their role's default rule, applied per token.
+//   burn, vault: only in multiples of N; the cap on what goes in, or on what comes out, is a hard limit.
+//   cite:        per token N is 1 (a card is cited once); a group can ask for N cards cited together.
+//   hold:        what a collector held is counted in whole multiples of N (holding 7 at "3 → 2" counts 6, earns 4);
+//                caps trim rather than refuse, since holding isn't an amount anyone chooses.
+// Defaults: 1 → 1 claim, no caps; holder 1 → 1 claim with at most 1 claim per token (one per unique token held).
+export const UNITS = ["claims", "entries"];
+const ROLE_DEFAULT = {
+  hold: { count: "snapshot", n: 1, m: 1, unit: "claims", maxIn: null, maxOut: 1 },
+  burn: { n: 1, m: 1, unit: "claims", maxIn: null, maxOut: null },
+  vault: { n: 1, m: 1, unit: "claims", maxIn: null, maxOut: null },
+  cite: { n: 1, m: 1, unit: "claims", maxIn: null, maxOut: null },
+};
 export function blankEvent(id, name = "") {
   return { id, name, intro: [], status: "draft", window: { opens: "", closes: "" }, snapshot: { tab: "", at: "" }, tokens: [],
-    roles: { hold: { count: "snapshot", claims: 1, max: null }, burn: { claims: 1, max: null }, vault: { claims: 1, max: null }, cite: { claims: 1, max: null } } };
+    roles: JSON.parse(JSON.stringify(ROLE_DEFAULT)), rules: [] };
+}
+const whole = (v, d, min = 0) => (v === "" || v === null || v === undefined || isNaN(Number(v)) ? d : Math.max(min, Math.floor(Number(v))));
+const cap = (src, k, d) => (src && Object.prototype.hasOwnProperty.call(src, k) ? whole(src[k], null) : d);
+// One rule's numbers, cleaned. `legacy` reads the older { claims, max } shape (one claim count per token, one cap).
+function cleanRule(src, role, d) {
+  const legacy = src && src.m === undefined && src.claims !== undefined;
+  const r = {
+    n: whole(src?.n, d.n, 1),
+    m: whole(legacy ? src.claims : src?.m, d.m),
+    unit: UNITS.includes(src?.unit) ? src.unit : d.unit,
+    // A cap that's given but blank means no maximum; a cap that isn't given at all takes the default.
+    maxIn: legacy ? (role !== "hold" ? whole(src.max, null) : null) : cap(src, "maxIn", d.maxIn),
+    maxOut: legacy ? (role === "hold" ? whole(src.claims, null) : null) : cap(src, "maxOut", d.maxOut),
+  };
+  return r;
 }
 
 // Cleans a config sent from build3r. Returns { config, problems }.
@@ -49,10 +81,26 @@ export function cleanEvent(c, now = Date.now()) {
     out.tokens.push({ key, role: ROLES.includes(t.role) ? t.role : null });
   }
   for (const r of ROLES) {
-    const src = c?.roles?.[r] || {};
-    const n = (v, d) => (v === "" || v === null || v === undefined || isNaN(Number(v)) ? d : Math.max(0, Math.floor(Number(v))));
-    out.roles[r] = { ...out.roles[r], claims: n(src.claims, out.roles[r].claims), max: n(src.max, null) };
-    if (r === "hold") out.roles.hold.count = src.count === "entry" ? "entry" : "snapshot";
+    out.roles[r] = cleanRule(c?.roles?.[r] || {}, r, ROLE_DEFAULT[r]);
+    if (r === "cite") out.roles.cite.n = 1;
+    if (r === "hold") out.roles.hold.count = c?.roles?.hold?.count === "entry" ? "entry" : "snapshot";
+  }
+  // Rules: each token in at most one, and only tokens of the rule's role; empty rules dropped.
+  const roleOf = new Map(out.tokens.map((t) => [t.key, t.role]));
+  const ruled = new Set();
+  let gi = 0;
+  for (const src of Array.isArray(c?.rules) ? c.rules : []) {
+    const role = ROLES.includes(src?.role) ? src.role : null;
+    if (!role) continue;
+    const keys = [...new Set((Array.isArray(src.keys) ? src.keys : []).map(String))].filter((k) => roleOf.get(k) === role && !ruled.has(k));
+    if (!keys.length) continue;
+    const scope = src.scope === "group" && keys.length > 1 ? "group" : "token";
+    const rule = { role, scope, keys, ...cleanRule(src, role, ROLE_DEFAULT[role]) };
+    if (role === "cite" && scope === "token") rule.n = 1;
+    if (scope === "group") rule.label = String(src.label || "").trim().slice(0, 40) || `group ${String.fromCharCode(65 + (gi % 26))}`;
+    if (scope === "group") gi++;
+    keys.forEach((k) => ruled.add(k));
+    out.rules.push(rule);
   }
   if (out.status === "published") {
     if (!out.name) problems.push("give the 3v3nt a name before publishing");
@@ -62,6 +110,18 @@ export function cleanEvent(c, now = Date.now()) {
   }
   return { config: out, problems };
 }
+
+// The rule each token follows: its own, its group's, or its role's default (per token).
+export function ruleBuckets(cfg, role) {
+  const keys = roleKeys(cfg, role), inRule = new Set();
+  const buckets = (cfg.rules || []).filter((r) => r.role === role).map((r) => { r.keys.forEach((k) => inRule.add(k)); return r.scope === "group" ? { ...r } : null; }).filter(Boolean);
+  for (const r of (cfg.rules || []).filter((r) => r.role === role && r.scope === "token")) for (const k of r.keys) buckets.push({ ...r, keys: [k] });
+  for (const k of keys) if (!inRule.has(k)) buckets.push({ role, scope: "token", keys: [k], ...cfg.roles[role], default: true });
+  return buckets;
+}
+const unitWord = (m, unit) => (m === 1 ? (unit === "entries" ? "entry" : "claim") : unit);
+export const ruleText = (r) => `${r.n} → ${r.m} ${unitWord(r.m, r.unit)}`
+  + (r.maxIn !== null && r.maxIn !== undefined ? ` · at most ${r.maxIn} in` : "") + (r.maxOut !== null && r.maxOut !== undefined ? ` · at most ${r.maxOut} ${r.unit}` : "");
 
 export const roleKeys = (cfg, role) => cfg.tokens.filter((t) => t.role === role).map((t) => t.key);
 export const eventCollections = (cfg) => [...new Set(cfg.tokens.map((t) => t.key.split(":")[0]))];
@@ -74,9 +134,12 @@ export function eventWindow(cfg, now = Date.now(), testMode = false) {
 }
 
 // rows: [{ key, wallet, balance }] from the snapshot tab or live holdings -> this wallet's holder tokens.
-export function heldIn(cfg, rows, wallet) {
-  const pool = new Set(roleKeys(cfg, "hold")), w = String(wallet || "").toLowerCase();
-  return [...new Set(rows.filter((r) => String(r.wallet).toLowerCase() === w && r.balance > 0 && pool.has(r.key)).map((r) => r.key))];
+export function heldIn(cfg, rows, wallet) { return [...heldCounts(cfg, rows, wallet).keys()]; }
+// ... and how many editions of each it held (what holder rules count).
+export function heldCounts(cfg, rows, wallet) {
+  const pool = new Set(roleKeys(cfg, "hold")), w = String(wallet || "").toLowerCase(), out = new Map();
+  for (const r of rows) if (String(r.wallet).toLowerCase() === w && r.balance > 0 && pool.has(r.key)) out.set(r.key, (out.get(r.key) || 0) + r.balance);
+  return out;
 }
 
 // payload: { hold: [key], burn: [{ key, qty }], vault: [{ key, qty }], cite: [key] }
@@ -86,8 +149,50 @@ export function cleanPayload(b) {
   return { hold: keys(b.hold), burn: qtys(b.burn), vault: qtys(b.vault), cite: keys(b.cite) };
 }
 
+// What one rule gives for what was put in. hold trims to whole multiples and to the caps; the others are checked.
+function applyRule(r, units) {
+  let u = units;
+  if (r.role === "hold") {
+    if (r.maxIn !== null && r.maxIn !== undefined) u = Math.min(u, r.maxIn);
+    u = Math.floor(u / r.n) * r.n;
+    let out = (u / r.n) * r.m;
+    if (r.maxOut !== null && r.maxOut !== undefined) out = Math.min(out, r.maxOut);
+    return { in: u, out, problems: [] };
+  }
+  const problems = [];
+  if (u % r.n) problems.push(`in multiples of ${r.n}`);
+  if (r.maxIn !== null && r.maxIn !== undefined && u > r.maxIn) problems.push(`at most ${r.maxIn}`);
+  const out = Math.floor(u / r.n) * r.m;
+  if (r.maxOut !== null && r.maxOut !== undefined && out > r.maxOut) problems.push(`at most ${r.maxOut} ${r.unit}`);
+  return { in: u, out, problems };
+}
+// Units each token puts in: hold = editions held (if claimed), cite = 1 (if cited), burn/vault = the amount chosen.
+function unitsFor(role, p, heldN) {
+  if (role === "hold") return new Map(p.hold.map((k) => [k, heldN.get(k) || 0]));
+  if (role === "cite") return new Map(p.cite.map((k) => [k, 1]));
+  const m = new Map(); for (const x of p[role]) m.set(x.key, (m.get(x.key) || 0) + x.qty); return m;
+}
+// The result of an entry: { claims, entries, lines: [{ role, keys, label, rule, in, out, unit }], problems }.
+export function outcome(cfg, p, heldN = new Map()) {
+  const res = { claims: 0, entries: 0, lines: [], problems: [] };
+  for (const role of ROLES) {
+    const units = unitsFor(role, p, heldN);
+    if (!units.size) continue;
+    for (const b of ruleBuckets(cfg, role)) {
+      const u = b.keys.reduce((a, k) => a + (units.get(k) || 0), 0);
+      if (!b.keys.some((k) => units.has(k))) continue;
+      const r = applyRule(b, u);
+      const name = b.scope === "group" ? b.label : b.keys[0];
+      r.problems.forEach((x) => res.problems.push(`${name}: ${role === "cite" ? "cite" : role === "hold" ? "hold" : role === "burn" ? "burn" : "send to 3vault"} ${x}`));
+      res[b.unit] += r.out;
+      res.lines.push({ role, keys: b.keys.filter((k) => units.has(k)), label: b.scope === "group" ? b.label : null, rule: ruleText(b), in: r.in, out: r.out, unit: b.unit });
+    }
+  }
+  return res;
+}
+
 // held: Set of holder tokens this wallet qualifies with (snapshot or now); live: Map key -> balance now.
-export function checkEntry(cfg, p, held, live) {
+export function checkEntry(cfg, p, held, live, heldN = new Map()) {
   const out = [];
   const pool = Object.fromEntries(ROLES.map((r) => [r, new Set(roleKeys(cfg, r))]));
   const twice = (list, what) => { const s = new Set(); for (const k of list) { if (s.has(k)) out.push(`${k} is ${what} twice`); s.add(k); } };
@@ -108,45 +213,51 @@ export function checkEntry(cfg, p, held, live) {
   for (const [k, q] of need) if (q > (live.get(k) || 0)) out.push(`you hold only ${live.get(k) || 0} of ${k}`);
   for (const k of p.cite) if (!pool.cite.has(k)) out.push(`${k} can't be cited in this 3v3nt`);
   twice(p.cite, "cited");
-  for (const r of ROLES) {
-    const max = cfg.roles[r].max;
-    const n = r === "hold" || r === "cite" ? p[r].length : p[r].reduce((a, x) => a + x.qty, 0);
-    if (max !== null && max !== undefined && n > max) out.push(`at most ${max} ${ROLE_LABEL[r]} ${r === "hold" || r === "cite" ? "tokens" : "editions"} per collector`);
-  }
+  if (!out.length) out.push(...outcome(cfg, p, heldN).problems);
   if (!ROLES.some((r) => p[r].length)) out.push("choose at least one token");
   return out;
 }
 
-export function entryClaims(cfg, p) {
-  const c = cfg.roles;
-  return p.hold.length * c.hold.claims + p.cite.length * c.cite.claims
-    + p.burn.reduce((a, x) => a + x.qty, 0) * c.burn.claims + p.vault.reduce((a, x) => a + x.qty, 0) * c.vault.claims;
-}
+// { claims, entries } if everything sent arrives.
+export function entryClaims(cfg, p, heldN = new Map()) { const o = outcome(cfg, p, heldN); return { claims: o.claims, entries: o.entries }; }
 
 // What moves on-chain: [{ key, dest, qty }]
 export const moves = (p) => [...p.burn.map((x) => ({ key: x.key, dest: DEST.burn, qty: x.qty })), ...p.vault.map((x) => ({ key: x.key, dest: DEST.vault, qty: x.qty }))];
 
-// sent: { "key>dest": { sent } } from sentTo. Counts each move up to the amount committed.
-export function confirmedClaims(cfg, p, sent) {
-  const c = cfg.roles;
+// sent: { "key>dest": { sent } } from sentTo. Burns and vaults count only up to the amount committed, and a rule
+// only pays out on what has arrived (a group of 3 → 2 pays nothing until all 3 are in).
+export function confirmedClaims(cfg, p, sent, heldN = new Map()) {
   const arrived = {};
-  let burn = 0, vault = 0;
+  const pa = { ...p, burn: [], vault: [] };
   for (const r of ["burn", "vault"]) for (const x of p[r]) {
     const k = `${x.key}>${DEST[r]}`, s = Math.min(x.qty, (sent[k] || {}).sent || 0);
-    arrived[k] = s; if (r === "burn") burn += s; else vault += s;
+    arrived[k] = s; if (s > 0) pa[r].push({ key: x.key, qty: s });
   }
-  const claims = p.hold.length * c.hold.claims + p.cite.length * c.cite.claims + burn * c.burn.claims + vault * c.vault.claims;
-  return { arrived, claims, pending: entryClaims(cfg, p) - claims };
+  const all = outcome(cfg, p, heldN), now = outcomeLenient(cfg, pa, heldN);
+  return { arrived, claims: now.claims, entries: now.entries, pending: all.claims - now.claims, pendingEntries: all.entries - now.entries };
+}
+// Like outcome, but what has arrived so far pays only its whole multiples (no refusals: it's partway there).
+function outcomeLenient(cfg, p, heldN) {
+  const res = { claims: 0, entries: 0 };
+  for (const role of ROLES) {
+    const units = unitsFor(role, p, heldN);
+    for (const b of ruleBuckets(cfg, role)) {
+      let u = b.keys.reduce((a, k) => a + (units.get(k) || 0), 0);
+      if (!u) continue;
+      if (role !== "hold" && b.maxIn !== null && b.maxIn !== undefined) u = Math.min(u, b.maxIn);
+      const r = applyRule({ ...b, role: "hold" }, u);   // whole multiples, caps trimmed
+      res[b.unit] += r.out;
+    }
+  }
+  return res;
 }
 
-export function entryMessage(cfg, wallet, p, names, issuedAt) {
+export function entryMessage(cfg, wallet, p, names, issuedAt, heldN = new Map()) {
   const nm = (k) => names[k] || k;
-  const sec = (title, lines) => `${title}\n${lines.length ? lines.join("\n") : "  none"}`;
-  const parts = [];
-  if (roleKeys(cfg, "hold").length) parts.push(sec(`held${cfg.roles.hold.count === "snapshot" ? " at the snapshot" : ""}: ${p.hold.length}`, p.hold.map((k) => `  ${nm(k)}`)));
-  if (roleKeys(cfg, "cite").length) parts.push(sec(`cited: ${p.cite.length}`, p.cite.map((k) => `  ${nm(k)}`)));
-  if (roleKeys(cfg, "burn").length) parts.push(sec(`to burn at 333burn: ${p.burn.reduce((a, x) => a + x.qty, 0)}`, p.burn.map((x) => `  ${nm(x.key)} x${x.qty}`)));
-  if (roleKeys(cfg, "vault").length) parts.push(sec(`to 3vault: ${p.vault.reduce((a, x) => a + x.qty, 0)}`, p.vault.map((x) => `  ${nm(x.key)} x${x.qty}`)));
-  return `thr33som3s 3v3nt: ${cfg.name}\nentry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${parts.join("\n\n")}\n\n`
-    + `claims if everything sent arrives by the close: ${entryClaims(cfg, p)}\n\nSigning is free and moves nothing now.`;
+  const o = outcome(cfg, p, heldN);
+  const verb = { hold: "held", cite: "cited", burn: "to burn at 333burn", vault: "to 3vault" };
+  const lines = o.lines.map((l) => `  ${verb[l.role]}: ${l.label ? `${l.label} (${l.keys.map(nm).join(", ")})` : nm(l.keys[0])}`
+    + `${l.role === "burn" || l.role === "vault" ? " x" + l.in : l.role === "hold" ? ` (${l.in} counted)` : ""} [${l.rule}] → ${l.out} ${l.unit}`);
+  return `thr33som3s 3v3nt: ${cfg.name}\nentry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${lines.join("\n")}\n\n`
+    + `if everything sent arrives by the close: ${o.claims} claim${o.claims !== 1 ? "s" : ""}, ${o.entries} entr${o.entries !== 1 ? "ies" : "y"} on the wheel\n\nSigning is free and moves nothing now.`;
 }

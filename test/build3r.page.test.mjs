@@ -2,7 +2,7 @@
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import assert from "assert/strict";
-const html = fs.readFileSync("/home/claude/repo/site/conn3ct_header_v56.html", "utf8");
+const html = fs.readFileSync("/home/claude/repo/site/conn3ct_header_v57.html", "utf8");
 const js = html.split("<script>")[1].split("</script>")[0];
 const dom = new JSDOM(`<div class="c-view-bar"><button id="view-all"></button><button id="view-mine"></button></div><div id="wallet-pill"><span id="wallet-addr"></span><button id="disconnect-btn"></button></div><input id="search-input"><div id="c-grid"></div><div id="c-lb"><img id="lb-img"><div id="lb-data"></div></div><div id="results-count"></div>`, { runScripts: "outside-only", url: "https://thr33som3s.com/conn3ct" });
 const w = dom.window, d = w.document; w.HTMLElement.prototype.scrollIntoView = () => {};
@@ -116,61 +116,111 @@ const F13_BURN = ['univ3rs3:70069','univ3rs3:70071','univ3rs3:317004','univ3rs3:
 assert.equal(JSON.stringify(roleOf('hold')), JSON.stringify([...F13_HOLD].sort()));
 assert.equal(JSON.stringify(roleOf('burn')), JSON.stringify([...F13_BURN].sort()));
 assert.equal(JSON.stringify(roleOf('cite')), '["thr33zi3s:9"]');
+// ── rules on the role pages ──
 d.querySelector('[data-b3role="hold"]').onclick();
-assert.match(d.getElementById('c3-modal-body').innerHTML, /the collector must hold it/);
-d.getElementById('c3-b3claims').value = '1'; d.getElementById('c3-b3max').value = ''; d.getElementById('c3-b3count').value = 'snapshot';
+let mb = () => d.getElementById('c3-modal-body').innerHTML;
+assert.match(mb(), /the collector must hold it/); assert.match(mb(), /default rule/);
+assert.equal(d.getElementById('c3-b3d-maxout').value, '1', 'holder default: at most 1 claim per token');
+assert.match(mb(), /default: 1 → 1 claim · at most 1 claims/);
+d.getElementById('c3-b3count').value = 'snapshot';
 d.getElementById('c3-b3back').onclick();
-d.querySelector('[data-b3role="cite"]').onclick(); d.getElementById('c3-b3claims').value = '0'; d.getElementById('c3-b3max').value = '1'; d.getElementById('c3-b3back').onclick();
+// burn: the seven Shayna pieces as one group (3 → 2 claims, at most 6 burned), the MM006 on its own (1 → 5 entries)
+d.querySelector('[data-b3role="burn"]').onclick();
+const selc = (k) => d.querySelector(`[data-b3sel="${k}"]`).onclick();
+d.getElementById('c3-b3rulego').onclick();
+assert.match(d.getElementById('c3-msg').textContent, /select some cards first/);
+SHAYNA.forEach(selc);
+d.getElementById('c3-b3rulego').onclick();
+assert.equal(d.getElementById('c3-b3rulepanel').hidden, false);
+d.getElementById('c3-b3scope').value = 'group'; d.getElementById('c3-b3scope').onchange();
+assert.equal(d.getElementById('c3-b3labelwrap').hidden, false);
+d.getElementById('c3-b3s-n').value = '3'; d.getElementById('c3-b3s-m').value = '2'; d.getElementById('c3-b3s-unit').value = 'claims';
+d.getElementById('c3-b3s-maxin').value = '6'; d.getElementById('c3-b3s-maxout').value = '';
+d.getElementById('c3-b3ruleapply').onclick();
+assert.match(d.querySelector('[data-b3sel="bulk:9"]').innerHTML, /group A: 3 → 2 claims · at most 6 in/);
+assert.match(d.querySelector('[data-b3sel="univ3rs3:70071"]').innerHTML, /default: 1 → 1 claim/);
+selc('univ3rs3:70071');
+d.getElementById('c3-b3rulego').onclick();
+d.getElementById('c3-b3scope').value = 'token'; d.getElementById('c3-b3scope').onchange();
+d.getElementById('c3-b3s-n').value = '1'; d.getElementById('c3-b3s-m').value = '5'; d.getElementById('c3-b3s-unit').value = 'entries';
+d.getElementById('c3-b3ruleapply').onclick();
+assert.match(d.querySelector('[data-b3sel="univ3rs3:70071"]').innerHTML, /1 → 5 entries/);
+// one Shayna piece back to the default: it leaves the group
+selc('bulk:319030'); d.getElementById('c3-b3unrule').onclick();
+assert.match(d.querySelector('[data-b3sel="bulk:319030"]').innerHTML, /default: 1 → 1 claim/);
+assert.equal(T.st().b3.rules.find(r => r.scope === 'group').keys.length, 6);
+d.getElementById('c3-b3back').onclick();
+// cite: per token, a card is cited once, so its "cited" field is hidden; the default here gives 1 entry
+d.querySelector('[data-b3role="cite"]').onclick();
+assert.equal(d.getElementById('c3-b3d-nwrap').hidden, true);
+d.getElementById('c3-b3d-unit').value = 'entries';
+d.getElementById('c3-b3back').onclick();
 d.getElementById('c3-b3intro').value = 'para one\n\npara two';
 let picked = 0; const op = d.getElementById('c3-b3open'); op.showPicker = () => { picked++; }; op.dispatchEvent(new w.Event('click'));
 assert.equal(picked, 1, 'clicking opens brings up the calendar');
 d.getElementById('c3-b3open').value = '2026-11-13T11:00'; d.getElementById('c3-b3close').value = '2026-11-14T02:59';
-assert.doesNotMatch(d.getElementById('c3-modal-body').innerHTML, /c3-b3snapat/, 'no separate snapshot field');
-assert.match(d.getElementById('c3-modal-body').innerHTML, /publish at least 30 minutes before it opens/);
+assert.doesNotMatch(mb(), /c3-b3snapat/, 'no separate snapshot field');
+assert.match(mb(), /publish at least 30 minutes before it opens/);
 await d.getElementById('c3-b3pub').onclick();
 const cfg = saved.at(-1).config;
 assert.equal(saved.at(-1).phase, 'build3r'); assert.equal(cfg.status, 'published'); assert.equal(JSON.stringify(cfg.intro), '["para one","para two"]');
-assert.equal(cfg.roles.cite.claims, 0); assert.equal(cfg.roles.cite.max, 1); assert.equal(cfg.roles.hold.count, 'snapshot'); assert.equal(cfg.snapshot.tab, 'snapshot-friday-the-13th-x3'); assert.equal(Date.parse(cfg.window.opens) - Date.parse(cfg.snapshot.at), 10 * 60000, 'snapshot 10 minutes before opening');
-assert.match(d.getElementById('c3-modal-body').innerHTML, /requested for .*10 minutes before it opens; taken on the ledger's first run after that/);
-assert.ok(cfg.window.opens.endsWith('Z') && Date.parse(cfg.window.closes) > Date.parse(cfg.window.opens));
-assert.match(d.getElementById('c3-modal-body').innerHTML, /published/);
+assert.equal(cfg.roles.hold.count, 'snapshot'); assert.equal(cfg.roles.cite.unit, 'entries'); assert.equal(cfg.roles.burn.m, 1);
+assert.equal(JSON.stringify(cfg.rules.map(r => [r.role, r.scope, r.keys.length, r.n, r.m, r.unit, r.maxIn, r.maxOut, r.label || null])),
+  JSON.stringify([['burn', 'group', 6, 3, 2, 'claims', 6, null, 'group A'], ['burn', 'token', 1, 1, 5, 'entries', null, null, null]]));
+assert.equal(cfg.snapshot.tab, 'snapshot-friday-the-13th-x3'); assert.equal(Date.parse(cfg.window.opens) - Date.parse(cfg.snapshot.at), 10 * 60000, 'snapshot 10 minutes before opening');
+assert.match(mb(), /requested for .*10 minutes before it opens; taken on the ledger's first run after that/);
+assert.match(mb(), /published/);
 
-// ── the player side, run from that config ──
-const info = { id: cfg.id, name: cfg.name, intro: ['para one'], roles: { hold: { count: 'snapshot', claims: 1, max: null }, burn: { claims: 1, max: null }, vault: { claims: 1, max: null }, cite: { claims: 0, max: 1 } },
+// ── the player side, run from that config through the server's own rule code ──
+const E = await import(new URL('../api/_lib/events.js', import.meta.url));
+const scfg = E.cleanEvent(JSON.parse(JSON.stringify(cfg))).config;
+const rulesFor = Object.fromEntries(['hold', 'burn', 'vault', 'cite'].map(r => [r, E.ruleBuckets(scfg, r).map(b => ({ scope: b.scope, keys: b.keys, label: b.label || null, n: b.n, m: b.m, unit: b.unit, maxIn: b.maxIn, maxOut: b.maxOut, text: E.ruleText(b) }))]));
+const nameOf = (k) => (FX.find(f => f.key === k) || { name: k }).name;
+const info = { id: cfg.id, name: cfg.name, intro: ['para one'], roles: scfg.roles, rules: rulesFor,
   window: { open: true, closed: false, closes: '2026-11-14T07:59:59Z', snapshotAt: '2026-11-13T16:30:22Z', holdCount: 'snapshot' },
-  tokens: { hold: [{ key: 'univ3rs3:93009', name: 'Stan Thomas, 1977 Monsters. Series 3 #009A' }, { key: 'gen2:1019', name: 'thr33zi3s #1019' }], burn: [{ key: 'univ3rs3:70069', name: '2026 Matchmak3rs - Tom Niedenfuer LOVES Shayna Twitchell Escape #MM004' }, { key: 'bulk:9', name: 'Black and White Silhouette "Shayna Twitchell" - Insert - #SBW009' }], vault: [], cite: [{ key: 'thr33zi3s:9', name: 'thr33zi3s #0009' }] },
-  held: ['gen2:1019'], balances: { 'univ3rs3:70069': 4 }, entry: null };
+  tokens: Object.fromEntries(['hold', 'burn', 'vault', 'cite'].map(r => [r, E.roleKeys(scfg, r).map(k => ({ key: k, name: nameOf(k) }))])),
+  held: ['gen2:1019'], heldCounts: { 'gen2:1019': 2 }, balances: { 'univ3rs3:70069': 4, 'univ3rs3:317004': 2, 'univ3rs3:70071': 3 }, entry: null };
 const posts = [];
 T.set({ walletAddr: '0xabc', session: { wallet: '0xabc', profile: { username: 'p' } }, provider: { getSigner: () => ({ signMessage: async () => '0xsig' }) },
-  api: async (path, o) => { if (path.startsWith('/commit?phase=event&')) return info; posts.push(o.body); return { issuedAt: 'x', message: 'm', claims: 3 }; } });
+  api: async (path, o) => { if (path.startsWith('/commit?phase=event&')) return info; posts.push(o.body);
+    const ent = E.entryClaims(scfg, E.cleanPayload(o.body), new Map([['gen2:1019', 2]])); return { issuedAt: 'x', message: 'm', ...ent }; } });
 T.refreshPlayerUi(); assert.equal(d.getElementById('view-build3r'), null);
 info.window.snapshotReady = false;
 await T.openEvent(cfg.id);
-assert.match(d.getElementById('c3-modal-body').innerHTML, /holder claims open once the snapshot is in/);
+assert.match(mb(), /holder claims open once the snapshot is in/);
 info.window.snapshotReady = true;
 await T.openEvent(cfg.id);
-let h = d.getElementById('c3-modal-body').innerHTML;
-assert.match(h, /para one/); assert.match(h, /0 of 1 claimed/); assert.match(h, /choose cards to cite/); assert.match(h, /1 claim per edition burned/); assert.match(h, /you hold 4/);
-assert.doesNotMatch(h, /SBW009/, 'only burnables held');
+let h = mb();
+assert.match(h, /para one/); assert.match(h, /0 of 1 claimed/); assert.match(h, /choose cards to cite/); assert.match(h, /you hold 4/);
+assert.match(h, /group A: 3 → 2 claims · at most 6 in/); assert.match(h, /any mix of these counts together/);
+assert.match(h, /1 → 5 entries/);
+assert.doesNotMatch(h, /SBW009/, 'only pieces the wallet holds');
 d.getElementById('c3-evhold').onclick();
 assert.equal(JSON.stringify(T.getFilteredTokens().map(t => t.key)), '["gen2:1019"]');
 T.openPicker(T.bk('univ3rs3:93009')); T.openPicker(T.bk('gen2:1019'));
 assert.equal(JSON.stringify([...T.st().evPlay.hold]), '["gen2:1019"]');
 d.getElementById('c3-viewcart').onclick();
+assert.match(mb(), /thr33zi3s #1019 · 2 held/); assert.match(mb(), /1 → 1 claim · at most 1 claims/);
 d.getElementById('c3-evcite').onclick();
 assert.equal(JSON.stringify(T.getFilteredTokens().map(t => t.key)), '["thr33zi3s:9"]', 'cite: any card in the cite role, not owned');
 T.openPicker(T.bk('thr33zi3s:9'));
-assert.match(T.renderCard(T.bk('thr33zi3s:9')), /cited ✓/);
 d.getElementById('c3-viewcart').onclick();
-d.querySelector('[data-evstep="burn|univ3rs3:70069|1"]').onclick(); d.querySelector('[data-evstep="burn|univ3rs3:70069|1"]').onclick();
-assert.equal(d.getElementById('c3-evtotal').textContent, 'claims: 3');   // 1 hold + 0 cite + 2 burns
+const step = (k, n) => d.querySelector(`[data-evstep="burn|${k}|${n}"]`).onclick();
+step('univ3rs3:70069', 1); step('univ3rs3:70069', 1); step('univ3rs3:317004', 1); step('univ3rs3:317004', 1);
+assert.match(d.getElementById('c3-evtotal').textContent, /group A: burn in multiples of 3 \(now 4\)/);
+step('univ3rs3:317004', -1);
+step('univ3rs3:70071', 1);
+assert.equal(d.querySelector('[data-evqty="burn|univ3rs3:70071"]').value, '1');
+assert.equal(d.getElementById('c3-evtotal').textContent, 'claims: 3 · entries on the wheel: 6', '1 held (default) + 2 from group A; 5 from MM006 + 1 cite');
 await d.getElementById('c3-review').onclick();
-assert.equal(JSON.stringify(posts[0]), JSON.stringify({ phase: 'event', id: cfg.id, hold: ['gen2:1019'], cite: ['thr33zi3s:9'], burn: [{ key: 'univ3rs3:70069', qty: 2 }], vault: [] }));
+assert.equal(JSON.stringify(posts[0]), JSON.stringify({ phase: 'event', id: cfg.id, hold: ['gen2:1019'], cite: ['thr33zi3s:9'], burn: [{ key: 'univ3rs3:70069', qty: 2 }, { key: 'univ3rs3:317004', qty: 1 }, { key: 'univ3rs3:70071', qty: 1 }], vault: [] }));
+assert.match(mb(), /claims: 3 · entries on the wheel: 6/);
 await d.getElementById('c3-submit').onclick();
 assert.equal(posts[1].signature, '0xsig');
-info.entry = { payload: posts[0] }; info.sent = { 'univ3rs3:70069>333burn': 1 }; info.confirmed = { arrived: { 'univ3rs3:70069>333burn': 1 }, claims: 2, pending: 1 };
+info.entry = { payload: posts[0] }; info.sent = { 'univ3rs3:70069>333burn': 2, 'univ3rs3:70071>333burn': 1 };
+info.confirmed = { arrived: {}, claims: 1, entries: 6, pending: 2, pendingEntries: 0 };
 await T.openEvent(cfg.id);
-h = d.getElementById('c3-modal-body').innerHTML;
-assert.match(h, /claims: 2 \(up to 3 once everything sent arrives\)/); assert.match(h, /cited/); assert.match(h, /step 1 of 1/);
-console.log("client tests (v52 build3r + generic 3v3nts): all passed");
+h = mb();
+assert.match(h, /claims: 1 \(up to 3 once everything sent arrives\) · entries on the wheel: 6/); assert.match(h, /cited/);
+console.log("client tests (v57 build3r rules + generic 3v3nts): all passed");
 process.exit(0);

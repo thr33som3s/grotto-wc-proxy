@@ -8,7 +8,7 @@ import { store } from "./_lib/store.js";
 import { readHoldings, readTransfers, readUsResults, readSnapshot, readSnapshotRequests } from "./_lib/ledger.js";
 import { F13, F13_HOLD, F13_BURN, f13Collections, f13Window, snapshotHolds, checkF13, f13Claims, f13Confirmed, f13Message } from "./_lib/f13.js";
 import { tally } from "./_lib/tally.js";
-import { cleanEvent, usesSnapshot, roleKeys, eventCollections, eventWindow, heldIn, cleanPayload, checkEntry, entryClaims, moves, confirmedClaims, entryMessage } from "./_lib/events.js";
+import { cleanEvent, usesSnapshot, roleKeys, eventCollections, eventWindow, heldIn, heldCounts, ruleBuckets, ruleText, cleanPayload, checkEntry, entryClaims, moves, confirmedClaims, entryMessage } from "./_lib/events.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
   univ3rs3Tokens, collectionTokens, checkDemographics, demographicsMessage, demographicsItems, sentTo, confirmSpan, PHASES, candidateRaces, shortName,
@@ -324,11 +324,15 @@ async function events(req, res, phase, wallet, KEY) {
   const holdRows = async () => (!usesSnapshot(cfg) || (TEST_MODE && !snapTaken)) ? readHoldings(KEY) : snapTaken ? readSnapshot(cfg.snapshot.tab, KEY) : [];
   if (req.method === "GET") {
     const out = { id: cfg.id, name: cfg.name, intro: cfg.intro, window: win, roles: cfg.roles,
-      tokens: Object.fromEntries(["hold", "burn", "vault", "cite"].map((r) => [r, roleKeys(cfg, r).map(card)])) };
+      tokens: Object.fromEntries(["hold", "burn", "vault", "cite"].map((r) => [r, roleKeys(cfg, r).map(card)])),
+      // Every token's rule (its own, its group's, or its role's default), so the page can show and step by it.
+      rules: Object.fromEntries(["hold", "burn", "vault", "cite"].map((r) => [r, ruleBuckets(cfg, r).map((b) => ({ scope: b.scope, keys: b.keys, label: b.label || null,
+        n: b.n, m: b.m, unit: b.unit, maxIn: b.maxIn, maxOut: b.maxOut, text: ruleText(b) }))])) };
     if (wallet) {
       const needHold = roleKeys(cfg, "hold").length > 0;
       const [hrows, holdings, mine] = await Promise.all([needHold ? holdRows() : [], readHoldings(KEY), store("get_commitment", { phase: stored, wallet })]);
       out.held = heldIn(cfg, hrows, wallet);
+      out.heldCounts = Object.fromEntries(heldCounts(cfg, hrows, wallet));
       const movable = new Set([...roleKeys(cfg, "burn"), ...roleKeys(cfg, "vault")]);
       out.balances = Object.fromEntries(holdings.filter((h) => h.wallet === wallet && movable.has(h.key) && h.balance > 0).map((h) => [h.key, h.balance]));
       out.entry = mine.commitment || null;
@@ -336,7 +340,7 @@ async function events(req, res, phase, wallet, KEY) {
         const from = TEST_MODE ? Date.parse(out.entry.submitted_at) : Date.parse(cfg.window.opens);
         const sent = sentTo(moves(out.entry.payload), wallet, await readTransfers(KEY), from, TEST_MODE ? Infinity : Date.parse(cfg.window.closes));
         out.sent = Object.fromEntries(Object.entries(sent).map(([k, v]) => [k, v.sent]));
-        out.confirmed = confirmedClaims(cfg, out.entry.payload, sent);
+        out.confirmed = confirmedClaims(cfg, out.entry.payload, sent, new Map(Object.entries(out.entry.payload.heldCounts || {})));
       }
     }
     return res.status(200).json(out);
@@ -352,18 +356,24 @@ async function events(req, res, phase, wallet, KEY) {
   const payload = cleanPayload(b);
   if (payload.hold.length && !snapReady) return res.status(409).json({ error: "the snapshot hasn't been taken yet; holder claims open once it is" });
   const [hrows, holdings] = await Promise.all([payload.hold.length ? holdRows() : [], readHoldings(KEY)]);
-  const held = TEST_MODE ? new Set(roleKeys(cfg, "hold")) : new Set(heldIn(cfg, hrows, wallet));
+  const counted = heldCounts(cfg, hrows, wallet);
+  if (TEST_MODE) for (const k of roleKeys(cfg, "hold")) if (!counted.has(k)) counted.set(k, 1);   // rehearsal: any holder piece counts as 1 held
+  const held = new Set(counted.keys());
+  // Holder rules count editions held; what was counted goes into the entry (and the signed message) as heldCounts.
+  payload.heldCounts = Object.fromEntries(payload.hold.map((k) => [k, counted.get(k) || 0]));
+  const heldN = new Map(Object.entries(payload.heldCounts));
   const live = TEST_MODE ? { get: () => 999 } : new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
-  const problems = checkEntry(cfg, payload, held, live);
+  const problems = checkEntry(cfg, payload, held, live, heldN);
   if (problems.length) return res.status(422).json({ error: problems[0], problems });
   const names = Object.fromEntries([...payload.hold, ...payload.cite, ...payload.burn.map((x) => x.key), ...payload.vault.map((x) => x.key)].map((k) => [k, card(k).name]));
   if (!b.signature) {
     const issuedAt = new Date().toISOString();
-    return res.status(200).json({ issuedAt, message: entryMessage(cfg, wallet, payload, names, issuedAt), claims: entryClaims(cfg, payload) });
+    const o = entryClaims(cfg, payload, heldN);
+    return res.status(200).json({ issuedAt, message: entryMessage(cfg, wallet, payload, names, issuedAt, heldN), claims: o.claims, entries: o.entries });
   }
   const age = Date.now() - Date.parse(b.issuedAt);
   if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
-  const message = entryMessage(cfg, wallet, payload, names, b.issuedAt);
+  const message = entryMessage(cfg, wallet, payload, names, b.issuedAt, heldN);
   if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
   const r = await store("put_commitment", { phase: stored, wallet, username: profile.username, payload, signature: b.signature, message, index: null });
   if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your entry; it is final" : r.error });
