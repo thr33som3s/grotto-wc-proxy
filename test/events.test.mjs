@@ -12,7 +12,7 @@ const sheets = {
   holdings: [["c","i","w","b"], ["univ3rs3","70069",ADDR,"5"], ["bulk","9",ADDR,"2"], ["univ3rs3","34235",ADDR,"1"]],
   transfers: [["chain","coll","x","id","from","to","amount","type","block","time","tx"]],
 };
-const ev = {}; const commits = {};
+const ev = {}; const commits = {}; const storeRaceExtra = {};
 const resp = (j) => ({ ok: true, status: 200, json: async () => j, text: async () => JSON.stringify(j) });
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -23,7 +23,14 @@ globalThis.fetch = async (url, opts) => {
     if (b.action === "list_events") return resp({ events: Object.values(ev) });
     if (b.action === "get_commitment") return resp({ commitment: commits[b.phase + b.wallet] || null });
     if (b.action === "get_profile") return resp({ profile: { username: "tester" } });
-    if (b.action === "put_commitment") { commits[b.phase + b.wallet] = { payload: b.payload, submitted_at: "2026-11-13T17:00:00Z" }; return resp({ ok: true, submitted_at: "2026-11-13T17:00:00Z" }); }
+    if (b.action === "put_commitment") {
+      if (b.payCap !== undefined) {   // like the store: the paid-editions total checked inside its lock
+        const taken = Object.entries(commits).filter(([k]) => k.startsWith(b.phase + "0x")).reduce((a, [, c]) => a + (c.payload.pay || 0), 0) + (storeRaceExtra[b.phase] || 0);
+        if (taken + (b.payload.pay || 0) > b.payCap) return resp({ ok: false, error: "pay sold out", left: Math.max(0, b.payCap - taken) });
+      }
+      commits[b.phase + b.wallet] = { payload: b.payload, submitted_at: "2026-11-13T17:00:00Z" }; return resp({ ok: true, submitted_at: "2026-11-13T17:00:00Z" });
+    }
+    if (b.action === "list_commitments") return resp({ commitments: Object.entries(commits).filter(([k]) => k.startsWith(b.phase + "0x")).map(([, c]) => ({ payload: c.payload })) });
     return resp({});
   }
   const m = u.match(/values\/([^?]+)/);
@@ -214,4 +221,58 @@ test("handler: the f13 game end to end through the generic runtime", async () =>
   (await import("../api/_lib/ledger.js")).resetLedgerMemo();
   const after = await call("GET", { phase: "event", id: "friday-13-x3" }, null, ADDR);
   assert.equal(after.j.confirmed.claims, 6); assert.equal(after.j.confirmed.pending, 1); assert.equal(after.j.confirmed.entries, 0);
+});
+
+// ── pay (thr33s's): commit to pay a fee per edition; each paid edition is one claim; limits per collector and in total ──
+test("pay: cleaned, exact totals, and publishable on its own", () => {
+  const { config, problems } = E.cleanEvent({ id: "pay-x", name: "pay x", status: "published", window: { opens: "2026-11-13T17:00:00Z", closes: "2026-11-14T07:59:59Z" },
+    pay: { enabled: true, cost: " 0.010 ", currency: " ETH ", maxPer: "3", maxTotal: "" } }, Date.parse("2026-11-13T16:00:00Z"));
+  assert.deepEqual(problems, [], "pay alone is enough to publish");
+  assert.deepEqual(config.pay, { enabled: true, cost: "0.010", currency: "ETH", maxPer: 3, maxTotal: null });
+  assert.equal(E.payTotal("0.010", 3), "0.03"); assert.equal(E.payTotal("25", 4), "100"); assert.equal(E.payTotal("0.1", 3), "0.3");
+  assert.match(E.cleanEvent({ id: "pay-y", name: "y", status: "published", window: { opens: "2026-11-13T17:00:00Z", closes: "2026-11-14T07:59:59Z" }, pay: { enabled: true, cost: "abc" } }, Date.parse("2026-11-13T16:00:00Z")).problems[0], /needs a cost per edition and a currency/);
+});
+test("pay: combines with burns; checked against the per-collector limit; spelled out in the signed message", () => {
+  const cfg = { ...E.cleanEvent({ id: "pay-z", tokens: [{ key: "univ3rs3:1", role: "burn" }], pay: { enabled: true, cost: "25", currency: "USD", maxPer: 3 } }).config, name: "z" };
+  const live = new Map([["univ3rs3:1", 5]]);
+  const p = E.cleanPayload({ burn: [{ key: "univ3rs3:1", qty: 2 }], pay: 3 });
+  assert.deepEqual(E.checkEntry(cfg, p, new Set(), live), []);
+  assert.deepEqual(E.entryClaims(cfg, p), { claims: 5, entries: 0 });
+  assert.match(E.checkEntry(cfg, E.cleanPayload({ pay: 4 }), new Set(), live)[0], /pay for at most 3 editions/);
+  assert.match(E.entryMessage(cfg, "0xabc", p, {}, "t"), /commits to pay 75 USD for 3 editions \(25 USD per edition\), paid off chain → 3 claims/);
+  const off = E.cleanEvent({ id: "pay-off", tokens: [{ key: "univ3rs3:1", role: "burn" }] }).config;
+  assert.match(E.checkEntry(off, E.cleanPayload({ pay: 1 }), new Set(), live)[0], /no pay option/);
+  assert.deepEqual(E.confirmedClaims(cfg, p, {}), { arrived: { "univ3rs3:1>333burn": 0 }, claims: 3, entries: 0, pending: 2, pendingEntries: 0 }, "paid editions count from the commitment; burns once they arrive");
+});
+test("handler: pay first come, first served; the total holds even when two sign at the same moment", async () => {
+  mock.timers.setTime(Date.parse("2026-11-13T16:00:00Z"));
+  const pcfg = { id: "pay-fcfs", name: "pay fcfs", status: "published", window: { opens: "2026-11-13T17:00:00Z", closes: "2026-11-14T07:59:59Z" },
+    pay: { enabled: true, cost: "0.01", currency: "ETH", maxPer: 4, maxTotal: 5 } };
+  assert.equal((await call("POST", {}, { phase: "build3r", config: pcfg }, ARTIST)).code, 200);
+  mock.timers.setTime(Date.parse("2026-11-13T18:00:00Z"));
+  const W2 = ethers.Wallet.createRandom(), A2 = W2.address.toLowerCase(), W3 = ethers.Wallet.createRandom(), A3 = W3.address.toLowerCase();
+  const enter = async (w, addr, pay) => {
+    const prep = await call("POST", {}, { phase: "event", id: "pay-fcfs", pay }, addr);
+    if (prep.code !== 200) return prep;
+    return call("POST", {}, { phase: "event", id: "pay-fcfs", pay, issuedAt: prep.j.issuedAt, signature: await w.signMessage(prep.j.message) }, addr);
+  };
+  let g = await call("GET", { phase: "event", id: "pay-fcfs" }, null, ADDR);
+  assert.equal(g.j.pay.left, 5); assert.equal(g.j.pay.cost, "0.01");
+  const prep = await call("POST", {}, { phase: "event", id: "pay-fcfs", pay: 3 }, ADDR);
+  assert.deepEqual(prep.j.pay, { editions: 3, amount: "0.03", currency: "ETH" });
+  assert.equal((await call("POST", {}, { phase: "event", id: "pay-fcfs", pay: 3, issuedAt: prep.j.issuedAt, signature: await W.signMessage(prep.j.message) }, ADDR)).code, 201);
+  g = await call("GET", { phase: "event", id: "pay-fcfs" }, null, A2);
+  assert.equal(g.j.pay.left, 2);
+  const over = await enter(W2, A2, 3);
+  assert.equal(over.code, 409); assert.match(over.j.error, /only 2 editions left/);
+  // someone else takes 1 between this collector's review and signature: the store's lock refuses, nothing is stored
+  const prep2 = await call("POST", {}, { phase: "event", id: "pay-fcfs", pay: 2 }, A2);
+  assert.equal(prep2.code, 200);
+  storeRaceExtra["event:pay-fcfs"] = 1;
+  const late = await call("POST", {}, { phase: "event", id: "pay-fcfs", pay: 2, issuedAt: prep2.j.issuedAt, signature: await W2.signMessage(prep2.j.message) }, A2);
+  assert.equal(late.code, 409); assert.match(late.j.error, /only 1 edition left to pay for; nothing was submitted/);
+  delete storeRaceExtra["event:pay-fcfs"];
+  assert.equal((await enter(W3, A3, 2)).code, 201);
+  assert.equal((await call("GET", { phase: "event", id: "pay-fcfs" }, null, A2)).j.pay.left, 0);
+  assert.match((await enter(W2, A2, 1)).j.error, /all taken/);
 });

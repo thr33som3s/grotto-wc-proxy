@@ -75,9 +75,11 @@ function eventTab_(cfg, d) {
   var out = [[cfg.name + ": results as of the ledger run " + when_(lastRun) + ". Open " + when_(cfg.window.opens) + " until " + when_(cfg.window.closes)
     + ". Profile names from claimed conn3ct profiles; wallets without one show as the wallet. Updates itself every 5 minutes."], []];
   out.push(["by collector"]);
-  out.push(["profile", "wallet", "entered", "claims", "entries on the wheel", "claims still pending", "entries still pending", "sends committed", "sends arrived"]);
-  var detail = [["detail"], ["profile", "wallet", "role", "tokens", "put in", "rule", "earns once everything arrives", "of", "arrived (burn / vault)", "transactions"]];
-  var tot = [0, 0, 0, 0, 0, 0];
+  var payOn = !!(cfg.pay && cfg.pay.enabled), cur = payOn ? cfg.pay.currency : "";
+  out.push(["profile", "wallet", "entered", "claims", "entries on the wheel", "claims still pending", "entries still pending", "sends committed", "sends arrived"]
+    .concat(payOn ? ["editions committed to pay", "amount to pay (" + cur + ")"] : []));
+  var detail = [["detail"], ["profile", "wallet", "role", "tokens", "put in", "rule", "earns once everything arrives", "of", "arrived (burn / vault)", "transactions"].concat(payOn ? ["amount to pay (" + cur + ")"] : [])];
+  var tot = [0, 0, 0, 0, 0, 0, 0];
   entries.forEach(function (e) {
     var items = moves(e.p), sent = {};
     items.forEach(function (it) { var k = it.key + ">" + it.dest; sent[k] = sent[k] || { sent: 0, txs: [] }; });
@@ -85,17 +87,20 @@ function eventTab_(cfg, d) {
     var c = confirmedClaims(cfg, e.p, sent);
     var committed = items.reduce(function (a, it) { return a + it.qty; }, 0);
     var arrived = Object.keys(c.arrived).reduce(function (a, k) { return a + c.arrived[k]; }, 0);
-    out.push([who(e.w), e.w, when_(e.at), c.claims, c.entries, c.pending, c.pendingEntries, committed, arrived]);
-    tot = [tot[0] + c.claims, tot[1] + c.entries, tot[2] + c.pending, tot[3] + c.pendingEntries, tot[4] + committed, tot[5] + arrived];
+    out.push([who(e.w), e.w, when_(e.at), c.claims, c.entries, c.pending, c.pendingEntries, committed, arrived]
+      .concat(payOn ? [e.p.pay || 0, e.p.pay ? payTotal(cfg.pay.cost, e.p.pay) : "0"] : []));
+    tot = [tot[0] + c.claims, tot[1] + c.entries, tot[2] + c.pending, tot[3] + c.pendingEntries, tot[4] + committed, tot[5] + arrived, tot[6] + (e.p.pay || 0)];
     outcome(cfg, e.p).lines.forEach(function (l) {
       var dest = l.role === "burn" ? "333burn" : l.role === "vault" ? "3vault" : null;
       var arr = dest ? l.keys.reduce(function (a, k) { return a + (c.arrived[k + ">" + dest] || 0); }, 0) : "";
       var txs = dest ? l.keys.map(function (k) { return (sent[k + ">" + dest] || { txs: [] }).txs.join(" "); }).filter(Boolean).join(" ") : "";
-      detail.push([who(e.w), e.w, { hold: "holder", burn: "burn", vault: "vault", cite: "cite" }[l.role],
-        (l.label ? l.label + ": " : "") + l.keys.map(nm).join(" | "), l.role === "cite" ? l.keys.length : l.in, l.rule, l.out, l.unit, arr, txs]);
+      detail.push([who(e.w), e.w, { hold: "holder", burn: "burn", vault: "vault", cite: "cite", pay: "pay" }[l.role],
+        l.role === "pay" ? "editions committed to pay" : (l.label ? l.label + ": " : "") + l.keys.map(nm).join(" | "), l.role === "cite" ? l.keys.length : l.in, l.rule, l.out, l.unit, arr, txs]
+        .concat(payOn ? [l.role === "pay" ? l.amount : ""] : []));
     });
   });
-  out.push(["TOTAL", entries.length + " entries", "", tot[0], tot[1], tot[2], tot[3], tot[4], tot[5]]);
+  out.push(["TOTAL", entries.length + " entries", "", tot[0], tot[1], tot[2], tot[3], tot[4], tot[5]]
+    .concat(payOn ? [tot[6], payTotal(cfg.pay.cost, tot[6])] : []));
   out.push([]);
   out = out.concat(detail);
 

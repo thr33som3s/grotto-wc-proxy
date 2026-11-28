@@ -40,9 +40,23 @@ const ROLE_DEFAULT = {
   vault: { n: 1, m: 1, unit: "claims", maxIn: null, maxOut: null },
   cite: { n: 1, m: 1, unit: "claims", maxIn: null, maxOut: null },
 };
+// Pay (thr33s's): a collector can commit to pay a fee per edition, each paid edition one claim. Nothing is charged:
+// the signature is the commitment; payment is handled off chain. Limits per collector and in total (first come,
+// first served); blank means none. Kept in its own block so it can move into each phase when phases arrive.
+const PAY_DEFAULT = { enabled: false, cost: "", currency: "", maxPer: null, maxTotal: null };
+export const DECIMAL_RE = /^\d+(\.\d{1,18})?$/;
+// cost × qty, exactly (no floating point): "0.01" × 3 -> "0.03".
+export function payTotal(cost, qty) {
+  if (!DECIMAL_RE.test(String(cost))) return "";
+  const [w, f = ""] = String(cost).split("."), scale = 10n ** BigInt(f.length);
+  const t = (BigInt(w + f) * BigInt(qty)).toString().padStart(f.length + 1, "0");
+  const int = t.slice(0, t.length - f.length), frac = f.length ? t.slice(t.length - f.length).replace(/0+$/, "") : "";
+  return frac ? `${int}.${frac}` : int;
+}
+export const payText = (pay) => `${pay.cost} ${pay.currency} per edition`;
 export function blankEvent(id, name = "") {
   return { id, name, intro: [], status: "draft", window: { opens: "", closes: "" }, snapshot: { tab: "", at: "" }, tokens: [],
-    roles: JSON.parse(JSON.stringify(ROLE_DEFAULT)), rules: [] };
+    roles: JSON.parse(JSON.stringify(ROLE_DEFAULT)), rules: [], pay: { ...PAY_DEFAULT } };
 }
 const whole = (v, d, min = 0) => (v === "" || v === null || v === undefined || isNaN(Number(v)) ? d : Math.max(min, Math.floor(Number(v))));
 const cap = (src, k, d) => (src && Object.prototype.hasOwnProperty.call(src, k) ? whole(src[k], null) : d);
@@ -101,11 +115,15 @@ export function cleanEvent(c, now = Date.now()) {
     keys.forEach((k) => ruled.add(k));
     out.rules.push(rule);
   }
+  const pay = c?.pay || {};
+  out.pay = { enabled: !!pay.enabled, cost: DECIMAL_RE.test(String(pay.cost ?? "").trim()) ? String(pay.cost).trim().replace(/^0+(?=\d)/, "") : "",
+    currency: String(pay.currency || "").trim().slice(0, 12), maxPer: whole(pay.maxPer, null, 1), maxTotal: whole(pay.maxTotal, null, 1) };
   if (out.status === "published") {
     if (!out.name) problems.push("give the 3v3nt a name before publishing");
+    if (out.pay.enabled && (!out.pay.cost || !out.pay.currency)) problems.push("the pay option needs a cost per edition and a currency");
     if (!(Date.parse(out.window.opens) < Date.parse(out.window.closes))) problems.push("set when the 3v3nt opens and closes");
     else if (Date.parse(out.window.opens) - now < PUBLISH_CUTOFF_MS) problems.push("a 3v3nt has to be published at least 30 minutes before it opens");
-    if (!out.tokens.some((t) => t.role)) problems.push("assign at least one token to a role");
+    if (!out.tokens.some((t) => t.role) && !out.pay.enabled) problems.push("assign at least one token to a role, or turn on the pay option");
   }
   return { config: out, problems };
 }
@@ -141,12 +159,13 @@ export function heldCounts(cfg, rows, wallet) {
   return out;
 }
 
-// payload: { hold: [{ key, qty }], burn: [{ key, qty }], vault: [{ key, qty }], cite: [key] }
+// payload: { hold: [{ key, qty }], burn: [{ key, qty }], vault: [{ key, qty }], cite: [key], pay: editions }
 // hold qty = how many of the editions held the collector claims with (0 means not claimed).
 export function cleanPayload(b) {
   const keys = (a) => (Array.isArray(a) ? a.map(String) : []);
   const qtys = (a) => (Array.isArray(a) ? a : []).filter((x) => Number(x?.qty) > 0).map((x) => ({ key: String(x.key), qty: Number(x.qty) }));
-  return { hold: qtys(b.hold), burn: qtys(b.burn), vault: qtys(b.vault), cite: keys(b.cite) };
+  const pay = Number(b?.pay) || 0;
+  return { hold: qtys(b.hold), burn: qtys(b.burn), vault: qtys(b.vault), cite: keys(b.cite), pay: pay > 0 ? pay : 0 };
 }
 
 // What one rule gives for what was put in: only whole multiples of N, within the caps (else a problem).
@@ -175,6 +194,10 @@ function unitsFor(role, p) {
 // The result of an entry: { claims, entries, lines: [{ role, keys, label, rule, in, out, unit }], problems }.
 export function outcome(cfg, p) {
   const res = { claims: 0, entries: 0, lines: [], problems: [] };
+  if (p.pay > 0) {   // each paid edition is one claim, counted from the commitment (payment is off chain)
+    res.claims += p.pay;
+    res.lines.push({ role: "pay", keys: [], label: null, rule: payText(cfg.pay || PAY_DEFAULT), in: p.pay, out: p.pay, unit: "claims", amount: payTotal((cfg.pay || {}).cost, p.pay) });
+  }
   for (const role of ROLES) {
     const units = unitsFor(role, p);
     if (!units.size) continue;
@@ -215,8 +238,14 @@ export function checkEntry(cfg, p, held, live, heldN = new Map()) {
   for (const [k, q] of need) if (q > (live.get(k) || 0)) out.push(`you hold only ${live.get(k) || 0} of ${k}`);
   for (const k of p.cite) if (!pool.cite.has(k)) out.push(`${k} can't be cited in this 3v3nt`);
   twice(p.cite, "cited");
+  if (p.pay) {
+    const pay = cfg.pay || PAY_DEFAULT;
+    if (!pay.enabled) out.push("this 3v3nt has no pay option");
+    else if (!Number.isInteger(p.pay) || p.pay < 1) out.push("choose a whole number of editions to pay for");
+    else if (pay.maxPer !== null && pay.maxPer !== undefined && p.pay > pay.maxPer) out.push(`pay for at most ${pay.maxPer} editions`);
+  }
   if (!out.length) out.push(...outcome(cfg, p).problems);
-  if (!ROLES.some((r) => p[r].length)) out.push("choose at least one token");
+  if (!ROLES.some((r) => p[r].length) && !p.pay) out.push("choose at least one token, or editions to pay for");
   return out;
 }
 
@@ -241,6 +270,7 @@ export function confirmedClaims(cfg, p, sent) {
 // Like outcome, but what has arrived so far pays only its whole multiples (no refusals: it's partway there).
 function outcomeLenient(cfg, p) {
   const res = { claims: 0, entries: 0 };
+  res.claims += p.pay || 0;   // paid editions count from the commitment
   for (const role of ROLES) {
     const units = unitsFor(role, p);
     for (const b of ruleBuckets(cfg, role)) {
@@ -257,7 +287,9 @@ export function entryMessage(cfg, wallet, p, names, issuedAt) {
   const nm = (k) => names[k] || k;
   const o = outcome(cfg, p);
   const verb = { hold: "claimed by holding", cite: "cited", burn: "to burn at 333burn", vault: "to 3vault" };
-  const lines = o.lines.map((l) => `  ${verb[l.role]}: ${l.label ? `${l.label} (${l.keys.map(nm).join(", ")})` : nm(l.keys[0])}`
+  const lines = o.lines.map((l) => l.role === "pay"
+    ? `  commits to pay ${l.amount} ${cfg.pay.currency} for ${l.in} edition${l.in !== 1 ? "s" : ""} (${l.rule}), paid off chain → ${l.out} ${l.unit}`
+    : `  ${verb[l.role]}: ${l.label ? `${l.label} (${l.keys.map(nm).join(", ")})` : nm(l.keys[0])}`
     + `${l.role === "cite" ? "" : " x" + l.in} [${l.rule}] → ${l.out} ${l.unit}`);
   return `thr33som3s 3v3nt: ${cfg.name}\nentry: final, one per collector\n\nwallet: ${wallet}\nsigned: ${issuedAt}\n\n${lines.join("\n")}\n\n`
     + `if everything sent arrives by the close: ${o.claims} claim${o.claims !== 1 ? "s" : ""}, ${o.entries} entr${o.entries !== 1 ? "ies" : "y"} on the wheel\n\nSigning is free and moves nothing now.`;

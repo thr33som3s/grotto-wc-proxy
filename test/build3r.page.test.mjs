@@ -2,7 +2,7 @@
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import assert from "assert/strict";
-const html = fs.readFileSync("/home/claude/repo/site/conn3ct_header_v58.html", "utf8");
+const html = fs.readFileSync("/home/claude/repo/site/conn3ct_header_v59.html", "utf8");
 const js = html.split("<script>")[1].split("</script>")[0];
 const dom = new JSDOM(`<div class="c-view-bar"><button id="view-all"></button><button id="view-mine"></button></div><div id="wallet-pill"><span id="wallet-addr"></span><button id="disconnect-btn"></button></div><input id="search-input"><div id="c-grid"></div><div id="c-lb"><img id="lb-img"><div id="lb-data"></div></div><div id="results-count"></div>`, { runScripts: "outside-only", url: "https://thr33som3s.com/conn3ct" });
 const w = dom.window, d = w.document; w.HTMLElement.prototype.scrollIntoView = () => {};
@@ -161,8 +161,13 @@ assert.equal(picked, 1, 'clicking opens brings up the calendar');
 d.getElementById('c3-b3open').value = '2026-11-13T11:00'; d.getElementById('c3-b3close').value = '2026-11-14T02:59';
 assert.doesNotMatch(mb(), /c3-b3snapat/, 'no separate snapshot field');
 assert.match(mb(), /publish at least 30 minutes before it opens/);
+assert.equal(d.getElementById('c3-b3payfields').hidden, true, 'pay fields hidden until the option is on');
+d.getElementById('c3-b3pay').checked = true; d.getElementById('c3-b3pay').onchange();
+assert.equal(d.getElementById('c3-b3payfields').hidden, false);
+d.getElementById('c3-b3paycost').value = '0.01'; d.getElementById('c3-b3paycur').value = 'ETH'; d.getElementById('c3-b3paymax').value = '3'; d.getElementById('c3-b3paytotal').value = '5';
 await d.getElementById('c3-b3pub').onclick();
 const cfg = saved.at(-1).config;
+assert.equal(JSON.stringify(cfg.pay), JSON.stringify({ enabled: true, cost: '0.01', currency: 'ETH', maxPer: 3, maxTotal: 5 }));
 assert.equal(saved.at(-1).phase, 'build3r'); assert.equal(cfg.status, 'published'); assert.equal(JSON.stringify(cfg.intro), '["para one","para two"]');
 assert.equal(cfg.roles.hold.count, 'snapshot'); assert.equal(cfg.roles.cite.unit, 'entries'); assert.equal(cfg.roles.burn.m, 1);
 assert.equal(JSON.stringify(cfg.rules.map(r => [r.role, r.scope, r.keys.length, r.n, r.m, r.unit, r.maxIn, r.maxOut, r.label || null])),
@@ -176,14 +181,15 @@ const E = await import(new URL('../api/_lib/events.js', import.meta.url));
 const scfg = E.cleanEvent(JSON.parse(JSON.stringify(cfg))).config;
 const rulesFor = Object.fromEntries(['hold', 'burn', 'vault', 'cite'].map(r => [r, E.ruleBuckets(scfg, r).map(b => ({ scope: b.scope, keys: b.keys, label: b.label || null, n: b.n, m: b.m, unit: b.unit, maxIn: b.maxIn, maxOut: b.maxOut, text: E.ruleText(b) }))]));
 const nameOf = (k) => (FX.find(f => f.key === k) || { name: k }).name;
-const info = { id: cfg.id, name: cfg.name, intro: ['para one'], roles: scfg.roles, rules: rulesFor,
+const info = { id: cfg.id, name: cfg.name, intro: ['para one'], roles: scfg.roles, rules: rulesFor, pay: { ...scfg.pay, left: 2 },
   window: { open: true, closed: false, closes: '2026-11-14T07:59:59Z', snapshotAt: '2026-11-13T16:30:22Z', holdCount: 'snapshot' },
   tokens: Object.fromEntries(['hold', 'burn', 'vault', 'cite'].map(r => [r, E.roleKeys(scfg, r).map(k => ({ key: k, name: nameOf(k) }))])),
   held: ['gen2:1019'], heldCounts: { 'gen2:1019': 2 }, balances: { 'univ3rs3:70069': 4, 'univ3rs3:317004': 2, 'univ3rs3:70071': 3 }, entry: null };
 const posts = [];
 T.set({ walletAddr: '0xabc', session: { wallet: '0xabc', profile: { username: 'p' } }, provider: { getSigner: () => ({ signMessage: async () => '0xsig' }) },
   api: async (path, o) => { if (path.startsWith('/commit?phase=event&')) return info; posts.push(o.body);
-    const ent = E.entryClaims(scfg, E.cleanPayload(o.body)); return { issuedAt: 'x', message: 'm', ...ent }; } });
+    const pl = E.cleanPayload(o.body), ent = E.entryClaims(scfg, pl);
+    return { issuedAt: 'x', message: 'm', ...ent, ...(pl.pay ? { pay: { editions: pl.pay, amount: E.payTotal(scfg.pay.cost, pl.pay), currency: scfg.pay.currency } } : {}) }; } });
 T.refreshPlayerUi(); assert.equal(d.getElementById('view-build3r'), null);
 info.window.snapshotReady = false;
 await T.openEvent(cfg.id);
@@ -221,16 +227,25 @@ assert.match(d.getElementById('c3-evtotal').textContent, /group A: burn in multi
 step('univ3rs3:317004', -1);
 step('univ3rs3:70071', 1);
 assert.equal(d.querySelector('[data-evqty="burn|univ3rs3:70071"]').value, '1');
-assert.equal(d.getElementById('c3-evtotal').textContent, 'claims: 3 · entries on the wheel: 6', '1 held (default) + 2 from group A; 5 from MM006 + 1 cite');
+// pay: 0.01 ETH each, at most 3 per collector, 2 of 5 left -> at most 2 here
+assert.match(mb(), /pay for editions: 0.01 ETH each/); assert.match(mb(), /2 of 5 left · at most 3 per collector/);
+const payStep = (n) => d.querySelector(`[data-evstep="pay|pay|${n}"]`).onclick();
+payStep(1); payStep(1); payStep(1);
+assert.equal(d.querySelector('[data-evqty="pay|pay"]').value, '2', 'never past what is left');
+assert.equal(d.getElementById('c3-evpaytotal').textContent, '= 0.02 ETH');
+payStep(-1);
+assert.equal(d.getElementById('c3-evpaytotal').textContent, '= 0.01 ETH');
+assert.equal(d.getElementById('c3-evtotal').textContent, 'claims: 4 · entries on the wheel: 6', '1 held (default) + 2 from group A + 1 paid; 5 from MM006 + 1 cite');
 await d.getElementById('c3-review').onclick();
-assert.equal(JSON.stringify(posts[0]), JSON.stringify({ phase: 'event', id: cfg.id, hold: [{ key: 'gen2:1019', qty: 1 }], cite: ['thr33zi3s:9'], burn: [{ key: 'univ3rs3:70069', qty: 2 }, { key: 'univ3rs3:317004', qty: 1 }, { key: 'univ3rs3:70071', qty: 1 }], vault: [] }).replace('hold:', 'hold:'));
-assert.match(mb(), /claims: 3 · entries on the wheel: 6/);
+assert.equal(JSON.stringify(posts[0]), JSON.stringify({ phase: 'event', id: cfg.id, hold: [{ key: 'gen2:1019', qty: 1 }], cite: ['thr33zi3s:9'], burn: [{ key: 'univ3rs3:70069', qty: 2 }, { key: 'univ3rs3:317004', qty: 1 }, { key: 'univ3rs3:70071', qty: 1 }], vault: [], pay: 1 }));
+assert.match(mb(), /claims: 4 · entries on the wheel: 6/); assert.match(mb(), /pay for 1 edition<\/span><span>commits you to pay 0.01 ETH/);
 await d.getElementById('c3-submit').onclick();
 assert.equal(posts[1].signature, '0xsig');
 info.entry = { payload: posts[0] }; info.sent = { 'univ3rs3:70069>333burn': 2, 'univ3rs3:70071>333burn': 1 };
-info.confirmed = { arrived: {}, claims: 1, entries: 6, pending: 2, pendingEntries: 0 };
+info.confirmed = { arrived: {}, claims: 2, entries: 6, pending: 2, pendingEntries: 0 };
 await T.openEvent(cfg.id);
 h = mb();
-assert.match(h, /claims: 1 \(up to 3 once everything sent arrives\) · entries on the wheel: 6/); assert.match(h, /cited/);
-console.log("client tests (v58 build3r rules + generic 3v3nts): all passed");
+assert.match(h, /claims: 2 \(up to 4 once everything sent arrives\) · entries on the wheel: 6/); assert.match(h, /cited/);
+assert.match(h, /committed to pay 0.01 ETH for 1 edition/);
+console.log("client tests (v59 build3r rules + pay + generic 3v3nts): all passed");
 process.exit(0);

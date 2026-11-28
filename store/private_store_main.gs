@@ -92,7 +92,15 @@ function putCommitment(req) {
   const lock = LockService.getScriptLock(); lock.waitLock(20000);
   try {
     const w = lc(req.wallet);
-    if (rows('commitments').some((r) => r.phase === req.phase && r.wallet === w)) return { ok: false, error: 'already submitted' };
+    const all = rows('commitments');
+    if (all.some((r) => r.phase === req.phase && r.wallet === w)) return { ok: false, error: 'already submitted' };
+    // build3r pay option, first come first served: the total is checked here, inside the lock, so two entries
+    // signed at the same moment can't both take the last paid editions.
+    if (req.payCap !== undefined && req.payCap !== null) {
+      const taken = all.filter((r) => r.phase === req.phase).reduce((a, r) => a + (Number((JSON.parse(r.payload_json || '{}') || {}).pay) || 0), 0);
+      const want = Number((req.payload || {}).pay) || 0;
+      if (taken + want > Number(req.payCap)) return { ok: false, error: 'pay sold out', left: Math.max(0, Number(req.payCap) - taken) };
+    }
     const at = now();
     tab('commitments').appendRow([req.phase, w, at, JSON.stringify(req.payload), req.signature || '', req.message || '', req.username || '']);
     // Sorted views (one row per candidate per race, per placement, per insert), sent by the server.

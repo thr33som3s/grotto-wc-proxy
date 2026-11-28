@@ -8,6 +8,7 @@ import { store } from "./_lib/store.js";
 import { readHoldings, readTransfers, readUsResults, readSnapshot, readSnapshotRequests } from "./_lib/ledger.js";
 import { F13, F13_HOLD, F13_BURN, f13Collections, f13Window, snapshotHolds, checkF13, f13Claims, f13Confirmed, f13Message } from "./_lib/f13.js";
 import { tally } from "./_lib/tally.js";
+import { payTotal } from "./_lib/events.js";
 import { cleanEvent, usesSnapshot, roleKeys, eventCollections, eventWindow, heldIn, heldCounts, ruleBuckets, ruleText, cleanPayload, checkEntry, entryClaims, moves, confirmedClaims, entryMessage } from "./_lib/events.js";
 import { cors, body, walletFromReq, signerOf } from "./_lib/session.js";
 import { windowState, storedPhase, RACES, RACE_CODES, candidatePool, candidacyMessage, TEST_MODE, candidacyBurns,
@@ -322,12 +323,18 @@ async function events(req, res, phase, wallet, KEY) {
   const snapReady = !usesSnapshot(cfg) || snapTaken || TEST_MODE;
   win.snapshotReady = snapReady;
   const holdRows = async () => (!usesSnapshot(cfg) || (TEST_MODE && !snapTaken)) ? readHoldings(KEY) : snapTaken ? readSnapshot(cfg.snapshot.tab, KEY) : [];
+  // Pay: editions committed so far by everyone (for the first-come, first-served total).
+  const payTaken = async () => ((await store("list_commitments", { phase: stored })).commitments || []).reduce((a, c) => a + (Number(c.payload?.pay) || 0), 0);
   if (req.method === "GET") {
     const out = { id: cfg.id, name: cfg.name, intro: cfg.intro, window: win, roles: cfg.roles,
       tokens: Object.fromEntries(["hold", "burn", "vault", "cite"].map((r) => [r, roleKeys(cfg, r).map(card)])),
       // Every token's rule (its own, its group's, or its role's default), so the page can show and step by it.
       rules: Object.fromEntries(["hold", "burn", "vault", "cite"].map((r) => [r, ruleBuckets(cfg, r).map((b) => ({ scope: b.scope, keys: b.keys, label: b.label || null,
         n: b.n, m: b.m, unit: b.unit, maxIn: b.maxIn, maxOut: b.maxOut, text: ruleText(b) }))])) };
+    if (cfg.pay && cfg.pay.enabled) {
+      out.pay = { ...cfg.pay };
+      if (cfg.pay.maxTotal !== null && cfg.pay.maxTotal !== undefined) out.pay.left = Math.max(0, cfg.pay.maxTotal - await payTaken());
+    }
     if (wallet) {
       const needHold = roleKeys(cfg, "hold").length > 0;
       const [hrows, holdings, mine] = await Promise.all([needHold ? holdRows() : [], readHoldings(KEY), store("get_commitment", { phase: stored, wallet })]);
@@ -366,17 +373,28 @@ async function events(req, res, phase, wallet, KEY) {
   const live = TEST_MODE ? { get: () => 999 } : new Map(holdings.filter((h) => h.wallet === wallet).map((h) => [h.key, h.balance]));
   const problems = checkEntry(cfg, payload, held, live, heldN);
   if (problems.length) return res.status(422).json({ error: problems[0], problems });
+  const payCap = payload.pay && cfg.pay && cfg.pay.maxTotal !== null && cfg.pay.maxTotal !== undefined ? cfg.pay.maxTotal : null;
+  if (payCap !== null) {
+    const left = Math.max(0, payCap - await payTaken());
+    if (payload.pay > left) return res.status(409).json({ error: left ? `only ${left} edition${left !== 1 ? "s" : ""} left to pay for` : "the paid editions are all taken", left });
+  }
   const names = Object.fromEntries([...payload.hold.map((x) => x.key), ...payload.cite, ...payload.burn.map((x) => x.key), ...payload.vault.map((x) => x.key)].map((k) => [k, card(k).name]));
   if (!b.signature) {
     const issuedAt = new Date().toISOString();
     const o = entryClaims(cfg, payload);
-    return res.status(200).json({ issuedAt, message: entryMessage(cfg, wallet, payload, names, issuedAt), claims: o.claims, entries: o.entries });
+    return res.status(200).json({ issuedAt, message: entryMessage(cfg, wallet, payload, names, issuedAt), claims: o.claims, entries: o.entries,
+      ...(payload.pay ? { pay: { editions: payload.pay, amount: payTotal(cfg.pay.cost, payload.pay), currency: cfg.pay.currency } } : {}) });
   }
   const age = Date.now() - Date.parse(b.issuedAt);
   if (!(age >= -60000 && age <= SIGN_MAX_AGE_MS)) return res.status(400).json({ error: "that signature request expired; review and sign again" });
   const message = entryMessage(cfg, wallet, payload, names, b.issuedAt);
   if (signerOf(message, b.signature) !== wallet) return res.status(400).json({ error: "signature does not match your wallet" });
-  const r = await store("put_commitment", { phase: stored, wallet, username: profile.username, payload, signature: b.signature, message, index: null });
-  if (r.ok === false) return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your entry; it is final" : r.error });
+  // The store checks the first-come, first-served total again inside its lock, so two entries can't both take the last.
+  const r = await store("put_commitment", { phase: stored, wallet, username: profile.username, payload, signature: b.signature, message, index: null,
+    ...(payCap !== null ? { payCap } : {}) });
+  if (r.ok === false) {
+    if (r.error === "pay sold out") return res.status(409).json({ error: r.left ? `only ${r.left} edition${r.left !== 1 ? "s" : ""} left to pay for; nothing was submitted` : "the paid editions are all taken; nothing was submitted", left: r.left || 0 });
+    return res.status(409).json({ error: r.error === "already submitted" ? "you already submitted your entry; it is final" : r.error });
+  }
   return res.status(201).json({ ok: true, submitted_at: r.submitted_at, payload });
 }

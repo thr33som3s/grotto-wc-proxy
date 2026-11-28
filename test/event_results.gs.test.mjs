@@ -9,10 +9,11 @@ const cfg = { id: "gourd-x", name: "Gourd Season x", status: "published", window
     { key: "gen2:1033", role: "vault" }, { key: "univ3rs3:93009", role: "hold" }, { key: "thr33zi3s:9", role: "cite" }],
   roles: { hold: { count: "snapshot", n: 1, m: 1, unit: "claims", maxIn: null, maxOut: 1 }, cite: { n: 1, m: 1, unit: "entries" } },
   rules: [{ role: "burn", scope: "group", keys: ["univ3rs3:317004", "univ3rs3:317006"], n: 3, m: 2, unit: "claims" },
-    { role: "burn", scope: "token", keys: ["univ3rs3:70071"], n: 1, m: 5, unit: "entries" }] };
+    { role: "burn", scope: "token", keys: ["univ3rs3:70071"], n: 1, m: 5, unit: "entries" }],
+  pay: { enabled: true, cost: "0.01", currency: "ETH", maxPer: 3, maxTotal: 10 } };
 const draft = { ...cfg, id: "a-draft", name: "draft", status: "draft" };
 const pay = { a: { hold: [{ key: "univ3rs3:93009", qty: 1 }], cite: ["thr33zi3s:9"], burn: [{ key: "univ3rs3:317004", qty: 2 }, { key: "univ3rs3:317006", qty: 1 }, { key: "univ3rs3:70071", qty: 2 }], vault: [{ key: "gen2:1033", qty: 1 }], heldCounts: { "univ3rs3:93009": 4 } },
-  b: { hold: [], cite: [], burn: [{ key: "univ3rs3:317004", qty: 3 }], vault: [] } };
+  b: { hold: [], cite: [], burn: [{ key: "univ3rs3:317004", qty: 3 }], vault: [], pay: 3 } };
 const T = (coll, id, from, to, amt, time, tx) => ["ethereum", coll, "x", id, from, to, String(amt), "transfer", "1", time, tx, "e"];
 const books = {
   "10hplc8h_AOXz_w9VOxVc9Fg_Tp97Gqg-tNi-dpCzbaQ": {
@@ -49,10 +50,12 @@ const sentA = { "univ3rs3:317004>333burn": { sent: 2 }, "univ3rs3:317006>333burn
 const cA = E.confirmedClaims(E.cleanEvent(cfg, 0).config, E.cleanPayload(pay.a), sentA);
 assert.deepEqual(row("crouton").slice(3, 9), [cA.claims, cA.entries, cA.pending, cA.pendingEntries, 6, 5].map(String));
 assert.deepEqual(row("crouton").slice(3, 7), ["4", "6", "0", "5"], "1 held + 2 (group A) + 1 (vault); 5 (1 of 2 MM006 in) + 1 cite; 5 more entries pending");
-assert.deepEqual(row(B).slice(3, 9), ["0", "0", "2", "0", "3", "0"], "a burn before the window, and a transfer elsewhere, don't count");
+assert.deepEqual(row(B).slice(3, 11), ["3", "0", "2", "0", "3", "0", "3", "0.03"], "3 paid editions count from the commitment; a burn before the window, and a transfer elsewhere, don't count");
+assert.deepEqual(row("crouton").slice(9, 11), ["0", "0"]);
 const collectors = v.slice(v.findIndex((r) => r[0] === "by collector") + 2, v.findIndex((r) => r[0] === "TOTAL"));
 assert.deepEqual(collectors.map((r) => r[1]), [A, B], "rehearsal entries (event:gourd-x-test) never appear");
-assert.deepEqual(row("TOTAL").slice(1, 9), ["2 entries", "", "4", "6", "2", "5", "9", "5"]);
+assert.deepEqual(row("TOTAL").slice(1, 11), ["2 entries", "", "7", "6", "2", "5", "9", "5", "3", "0.03"]);
+assert.ok(v.some((r) => r[0] === B && r[2] === "pay" && r[3] === "editions committed to pay" && r[4] === "3" && r[5] === "0.01 ETH per edition" && r[6] === "3" && r[10] === "0.03"));
 // detail
 const det = v.filter((r) => r[0] === "crouton" && r[2]);
 assert.ok(det.some((r) => r[2] === "burn" && r[3] === "group A: Gourd DGSST1 | Gourd DGSST3" && r[4] === "3" && r[5] === "3 → 2 claims" && r[6] === "2" && r[8] === "3" && r[9] === "0xt1 0xt2"));
