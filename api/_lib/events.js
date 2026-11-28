@@ -45,12 +45,17 @@ const ROLE_DEFAULT = {
 // first served); blank means none. Kept in its own block so it can move into each phase when phases arrive.
 const PAY_DEFAULT = { enabled: false, cost: "", currency: "", maxPer: null, maxTotal: null };
 export const DECIMAL_RE = /^\d+(\.\d{1,18})?$/;
-// cost × qty, exactly (no floating point): "0.01" × 3 -> "0.03".
+// cost × qty, exactly (no floating point): "0.01" × 3 -> "0.03". Digit by digit, so it runs anywhere (Apps Script too).
 export function payTotal(cost, qty) {
   if (!DECIMAL_RE.test(String(cost))) return "";
-  const [w, f = ""] = String(cost).split("."), scale = 10n ** BigInt(f.length);
-  const t = (BigInt(w + f) * BigInt(qty)).toString().padStart(f.length + 1, "0");
-  const int = t.slice(0, t.length - f.length), frac = f.length ? t.slice(t.length - f.length).replace(/0+$/, "") : "";
+  const [w, f = ""] = String(cost).split(".");
+  const digits = (w + f).split("").map(Number), q = Math.floor(Number(qty)) || 0;
+  let carry = 0;
+  const out = [];
+  for (let i = digits.length - 1; i >= 0; i--) { const x = digits[i] * q + carry; out.unshift(x % 10); carry = Math.floor(x / 10); }
+  while (carry > 0) { out.unshift(carry % 10); carry = Math.floor(carry / 10); }
+  const t = out.join("").padStart(f.length + 1, "0");
+  const int = t.slice(0, t.length - f.length).replace(/^0+(?=\d)/, ""), frac = f.length ? t.slice(t.length - f.length).replace(/0+$/, "") : "";
   return frac ? `${int}.${frac}` : int;
 }
 export const payText = (pay) => `${pay.cost} ${pay.currency} per edition`;
