@@ -2,7 +2,7 @@
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import assert from "assert/strict";
-const html = fs.readFileSync("/home/claude/repo/site/conn3ct_header_v59.html", "utf8");
+const html = fs.readFileSync("/home/claude/repo/site/conn3ct_header_v60.html", "utf8");
 const js = html.split("<script>")[1].split("</script>")[0];
 const dom = new JSDOM(`<div class="c-view-bar"><button id="view-all"></button><button id="view-mine"></button></div><div id="wallet-pill"><span id="wallet-addr"></span><button id="disconnect-btn"></button></div><div id="c-grid"></div><div id="results-count"></div>`, { runScripts: "outside-only", url: "https://thr33som3s.com/conn3ct" });
 const w = dom.window; w.HTMLElement.prototype.scrollIntoView = () => {};
